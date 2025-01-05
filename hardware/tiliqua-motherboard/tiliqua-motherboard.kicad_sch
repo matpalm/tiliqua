@@ -6228,7 +6228,7 @@
 	)
 	(global_label "MOBO_I2C_SDA"
 		(shape bidirectional)
-		(at 270.51 129.54 0)
+		(at 278.13 129.54 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -6238,7 +6238,7 @@
 		)
 		(uuid "a9dd248b-5d48-4591-8d58-d3e059ef4dcf")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 288.5765 129.54 0)
+			(at 296.1965 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6844,7 +6844,7 @@
 	)
 	(global_label "MOBO_I2C_SCL"
 		(shape bidirectional)
-		(at 270.51 127 0)
+		(at 278.13 127 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -6854,7 +6854,7 @@
 		)
 		(uuid "da08d1f5-d53c-46d4-b665-d6af7bc016a5")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 288.516 127 0)
+			(at 296.136 127 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8720,6 +8720,126 @@
 			(project "tiliqua-motherboard"
 				(path "/df6062c3-a570-4505-924c-c7fe32df3670"
 					(reference "#PWR062")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "OLIMEX_RCL:R")
+		(at 274.32 129.54 0)
+		(unit 1)
+		(exclude_from_sim yes)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "5f26eacc-0456-4db7-b714-73b3d139d93e")
+		(property "Reference" "R41"
+			(at 274.32 131.826 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "33R"
+			(at 274.32 129.54 0)
+			(effects
+				(font
+					(size 0.889 0.889)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 274.32 131.318 0)
+			(effects
+				(font
+					(size 0.762 0.762)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 274.32 129.54 90)
+			(effects
+				(font
+					(size 0.762 0.762)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 274.32 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Fieldname 1" "Value 1"
+			(at 274.32 129.54 0)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(hide yes)
+			)
+		)
+		(property "Fieldname2" "Value2"
+			(at 274.32 129.54 0)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(hide yes)
+			)
+		)
+		(property "Fieldname3" "Value3"
+			(at 274.32 129.54 0)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(hide yes)
+			)
+		)
+		(property "lcsc#" "C138002"
+			(at 274.32 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Tol" ""
+			(at 274.32 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C138021"
+			(at 268.605 128.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "a76d3ca2-522f-41a3-bd2d-04903499f1e6")
+		)
+		(pin "2"
+			(uuid "5d688e4f-f31b-4440-9170-5f18cd03a0b4")
+		)
+		(instances
+			(project "tiliqua-motherboard"
+				(path "/df6062c3-a570-4505-924c-c7fe32df3670"
+					(reference "R41")
 					(unit 1)
 				)
 			)
@@ -12592,6 +12712,126 @@
 			(project "tiliqua-motherboard"
 				(path "/df6062c3-a570-4505-924c-c7fe32df3670"
 					(reference "#PWR092")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "OLIMEX_RCL:R")
+		(at 274.32 127 0)
+		(unit 1)
+		(exclude_from_sim yes)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "ecd946db-73f5-43c0-843c-82b343234038")
+		(property "Reference" "R40"
+			(at 274.32 124.968 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "33R"
+			(at 274.32 127 0)
+			(effects
+				(font
+					(size 0.889 0.889)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 274.32 128.778 0)
+			(effects
+				(font
+					(size 0.762 0.762)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 274.32 127 90)
+			(effects
+				(font
+					(size 0.762 0.762)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 274.32 127 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Fieldname 1" "Value 1"
+			(at 274.32 127 0)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(hide yes)
+			)
+		)
+		(property "Fieldname2" "Value2"
+			(at 274.32 127 0)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(hide yes)
+			)
+		)
+		(property "Fieldname3" "Value3"
+			(at 274.32 127 0)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+				(hide yes)
+			)
+		)
+		(property "lcsc#" "C138002"
+			(at 274.32 127 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Tol" ""
+			(at 274.32 127 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC" "C138021"
+			(at 268.605 125.73 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "e66a98b7-737f-42b1-94f7-c1a835c7f5ef")
+		)
+		(pin "2"
+			(uuid "52f15112-adf5-48ba-8947-2b0fef4b4a30")
+		)
+		(instances
+			(project "tiliqua-motherboard"
+				(path "/df6062c3-a570-4505-924c-c7fe32df3670"
+					(reference "R40")
 					(unit 1)
 				)
 			)

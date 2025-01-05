@@ -2184,7 +2184,7 @@
 		)
 		(uuid 77197dd1-1a44-4ad1-b433-1d2a607349e5)
 	)
-	(text "DVI sink == +3V3 with 50ohm series\npin_hi == 0mA\npin_lo == 3V3 / (50 + 270) ~= 10.3mA\n(220 adds a bit more headroom, drive strength can be reduced)"
+	(text "DVI sink == +3V3 with 50ohm series\npin_hi == 0mA\npin_lo == 3V3 / (50 + 270) ~= 10.3mA\n(220 adds a bit more headroom than 270, drive strength can be reduced)"
 		(exclude_from_sim no)
 		(at 92.964 58.928 0)
 		(effects

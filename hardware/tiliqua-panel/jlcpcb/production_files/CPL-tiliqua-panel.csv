@@ -1,1 +1,5 @@
 Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
+E1,MountingHole_Pad,,4.525,-3.0,0.0,top
+E2,MountingHole_Pad,,19.525,-3.0,0.0,top
+E3,MountingHole_Pad,,4.475,-125.5,0.0,top
+E4,MountingHole_Pad,,19.525,-125.5,0.0,top

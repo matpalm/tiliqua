@@ -1,6 +1,10 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![allow(clippy::inline_always)]
 #![allow(clippy::must_use_candidate)]
+
+#[cfg(test)]
+#[macro_use]
+extern crate std;
 
 // modules
 pub mod serial;

@@ -135,6 +135,7 @@ dependencies = [
  "embedded-hal",
  "embedded-hal-nb",
  "log",
+ "micromath",
  "nb",
  "riscv",
 ]

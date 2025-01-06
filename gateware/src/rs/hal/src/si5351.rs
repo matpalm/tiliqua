@@ -7,79 +7,10 @@
    http://opensource.org/licenses/MIT>, at your option. This file may not be
    copied, modified, or distributed except according to those terms.
 */
-/*!
-A platform agnostic Rust driver for the [Si5351], based on the
-[`embedded-hal`] traits.
-
-## The Device
-
-The Silicon Labs [Si5351] is an any-frequency CMOS clock generator.
-
-The device has an I²C interface.
-
-## Usage
-
-Import this crate and an `embedded_hal` implementation:
-
-```
-extern crate stm32f103xx_hal as hal;
-extern crate si5351;
-```
-
-Initialize I²C bus (differs between `embedded_hal` implementations):
-
-```no_run
-# extern crate stm32f103xx_hal as hal;
-use hal::i2c::I2c;
-type I2C = ...;
-
-# fn main() {
-let i2c: I2C = initialize_i2c();
-# }
-```
-
-Then instantiate the device:
-
-```no_run
-# extern crate stm32f103xx_hal as hal;
-# extern crate si5351;
-use si5351;
-use si5351::{Si5351, Si5351Device};
-
-# fn main() {
-let mut clock = Si5351Device<I2C>::new(i2c, false, 25_000_000);
-clock.init(si5351::CrystalLoad::_10)?;
-# }
-```
-
-Or, if you have an [Adafruit module], you can use shortcut functions to initializate it:
-```no_run
-# extern crate stm32f103xx_hal as hal;
-# extern crate si5351;
-use si5351;
-use si5351::{Si5351, Si5351Device};
-
-# fn main() {
-let mut clock = Si5351Device<I2C>::new_adafruit_module(i2c);
-clock.init_adafruit_module()?;
-# }
-```
-
-And set frequency on one of the outputs:
-
-```no_run
-use si5351;
-
-clock.set_frequency(si5351::PLL::A, si5351::ClockOutput::Clk0, 14_175_000)?;
-```
-
-[Si5351]: https://www.silabs.com/documents/public/data-sheets/Si5351-B.pdf
-[`embedded-hal`]: https://github.com/japaric/embedded-hal
-[Adafruit module]: https://www.adafruit.com/product/2045
-*/
 
 use embedded_hal::i2c::I2c;
 use core::fmt;
+use micromath::F32Ext;
 
 #[derive(Debug)]
 pub enum Error {
@@ -379,6 +310,59 @@ pub struct Si5351Device<I2C> {
     clk_enabled_mask: u8,
     ms_int_mode_mask: u8,
     ms_src_mask: u8,
+}
+
+struct SpreadParams {
+    f_pfd: f32,      // Input frequency to PLLA in Hz
+    a: f32,          // PLLA Multisynth ratio components
+    b: f32,
+    c: f32,
+    ssc_amp: f32,    // Spread amplitude (e.g., 0.01 for 1%)
+}
+
+impl SpreadParams {
+
+    fn calc_ssudp(&self) -> u16 {
+        ((self.f_pfd / (4.0 * 31500.0)).floor() as u16) & 0x7FF
+    }
+
+    fn calc_down_spread(&self) -> (u16, u16, u16) {
+        let ssudp = self.calc_ssudp();
+
+        // Calculate intermediate SSDN value
+        let ssdn = 64.0 * (self.a + self.b / self.c) *
+            (self.ssc_amp / ((1.0 + self.ssc_amp) * ssudp as f32));
+
+        // Calculate final register values
+        let ssdn_p1 = ssdn.floor() as u16 & 0x7FF;
+        let ssdn_p2 = ((32767.0f32 * (ssdn - ssdn_p1 as f32)) as u16) & 0x3FFF;
+        let ssdn_p3 = 0x7FFF;  // 32,767 = 0x7FFF
+
+        (ssdn_p1, ssdn_p2, ssdn_p3)
+    }
+
+    fn calc_center_spread(&self) -> (u16, u16, u16, u16, u16, u16, u16, f32, f32) {
+        let ssudp = self.calc_ssudp();
+
+        // Calculate intermediate SSUP value
+        let ssup = 128.0 * (self.a + self.b / self.c) *
+            (self.ssc_amp / ((1.0 - self.ssc_amp) * ssudp as f32));
+
+        // Calculate intermediate SSDN value
+        let ssdn = 128.0 * (self.a + self.b / self.c) *
+            (self.ssc_amp / ((1.0 + self.ssc_amp) * ssudp as f32));
+
+        // Calculate final register values
+        let ssup_p1 = ssup.floor() as u16 & 0x7FF;
+        let ssup_p2 = ((32767.0f32 * (ssup - ssup_p1 as f32)) as u16) & 0x3FFF;
+        let ssup_p3 = 0x7FFF;
+
+        let ssdn_p1 = ssdn.floor() as u16 & 0x7FF;
+        let ssdn_p2 = ((32767.0f32 * (ssdn - ssdn_p1 as f32)) as u16) & 0x3FFF;
+        let ssdn_p3 = 0x7FFF;
+
+        (ssup_p1, ssup_p2, ssup_p3, ssdn_p1, ssdn_p2, ssdn_p3, ssudp, ssup, ssdn)
+    }
 }
 
 pub trait Si5351 {
@@ -807,5 +791,29 @@ impl<I2C: I2c> Si5351 for Si5351Device<I2C>
         self.write_register(reg, current as u8)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spread_spectrum() {
+        let params = SpreadParams {
+            f_pfd: 25e6,  // 25 MHz
+            a: 35.0,      // Example multisynth ratio values
+            b: 1.0,
+            c: 73.0,
+            ssc_amp: 0.015, // 1% spread
+        };
+
+        let (ssdn_p1, ssdn_p2, ssdn_p3) = params.calc_down_spread();
+        println!("Down spread: P1={:03X} P2={:04X} P3={:04X}", ssdn_p1, ssdn_p2, ssdn_p3);
+
+        let (ssup_p1, ssup_p2, ssup_p3, ssdn_p1, ssdn_p2, ssdn_p3, ssudp, ssup, ssdn) = params.calc_center_spread();
+        println!("Center spread up: P1={:03X} P2={:04X} P3={:04X}", ssup_p1, ssup_p2, ssup_p3);
+        println!("ssudp={} ssup={} ssdn={}", ssudp, ssup, ssdn);
+        println!("Center spread down: P1={:03X} P2={:04X} P3={:04X}", ssdn_p1, ssdn_p2, ssdn_p3);
     }
 }

@@ -161,22 +161,6 @@ enum Register {
     Clk5 = 21,
     Clk6 = 22,
     Clk7 = 23,
-    /*
-    // Spread spectrum control registers
-    SscEn_Ssdnp2hi   = 149,
-    Ssdnp2lo         = 150,
-    SscMode_Ssdnp3hi = 151,
-    Ssdnp3lo         = 152,
-    Ssdnp1lo         = 153,
-    Ssudphi_Ssdnp1hi = 154,
-    Ssudplo          = 155,
-    Ssupp2hi         = 156,
-    Ssupp2lo         = 157,
-    Ssupp3hi         = 158,
-    Ssupp3lo         = 159,
-    Ssupp1lo         = 160,
-    Ssnclk_Ssupp1hi  = 161,
-    */
     Clk0PhOff = 165,
     Clk1PhOff = 166,
     Clk2PhOff = 167,
@@ -312,7 +296,7 @@ pub struct Si5351Device<I2C> {
     ms_src_mask: u8,
 }
 
-struct SpreadParams {
+pub struct SpreadParams {
     f_pfd: f32,      // Input frequency to PLLA in Hz
     a: f32,          // PLLA Multisynth ratio components
     b: f32,
@@ -326,22 +310,7 @@ impl SpreadParams {
         ((self.f_pfd / (4.0 * 31500.0)).floor() as u16) & 0x7FF
     }
 
-    fn calc_down_spread(&self) -> (u16, u16, u16) {
-        let ssudp = self.calc_ssudp();
-
-        // Calculate intermediate SSDN value
-        let ssdn = 64.0 * (self.a + self.b / self.c) *
-            (self.ssc_amp / ((1.0 + self.ssc_amp) * ssudp as f32));
-
-        // Calculate final register values
-        let ssdn_p1 = ssdn.floor() as u16 & 0x7FF;
-        let ssdn_p2 = ((32767.0f32 * (ssdn - ssdn_p1 as f32)) as u16) & 0x3FFF;
-        let ssdn_p3 = 0x7FFF;  // 32,767 = 0x7FFF
-
-        (ssdn_p1, ssdn_p2, ssdn_p3)
-    }
-
-    fn calc_center_spread(&self) -> (u16, u16, u16, u16, u16, u16, u16, f32, f32) {
+    fn calc_center_spread(&self) -> (u16, u16, u16, u16, u16, u16) {
         let ssudp = self.calc_ssudp();
 
         // Calculate intermediate SSUP value
@@ -361,7 +330,7 @@ impl SpreadParams {
         let ssdn_p2 = ((32767.0f32 * (ssdn - ssdn_p1 as f32)) as u16) & 0x3FFF;
         let ssdn_p3 = 0x7FFF;
 
-        (ssup_p1, ssup_p2, ssup_p3, ssdn_p1, ssdn_p2, ssdn_p3, ssudp, ssup, ssdn)
+        (ssup_p1, ssup_p2, ssup_p3, ssdn_p1, ssdn_p2, ssdn_p3)
     }
 }
 
@@ -382,8 +351,9 @@ pub trait Si5351 {
         freq: u32,
     ) -> Result<(u8, u32), Error>;
 
-    fn set_frequency(&mut self, pll: PLL, clk: ClockOutput, freq: u32) -> Result<(), Error>;
+    fn set_frequency(&mut self, pll: PLL, clk: ClockOutput, freq: u32, spread: Option<f32>) -> Result<(), Error>;
     fn set_clock_enabled(&mut self, clk: ClockOutput, enabled: bool);
+    fn setup_spread_spectrum(&mut self, pll: PLL, params: &SpreadParams) -> Result<(), Error>;
 
     fn flush_output_enabled(&mut self) -> Result<(), Error>;
     fn flush_clock_control(&mut self, clk: ClockOutput) -> Result<(), Error>;
@@ -631,9 +601,35 @@ impl<I2C: I2c> Si5351 for Si5351Device<I2C>
         Ok((mult, f))
     }
 
-    fn set_frequency(&mut self, pll: PLL, clk: ClockOutput, freq: u32) -> Result<(), Error> {
-        let denom: u32 = 1048575;
+    fn setup_spread_spectrum(&mut self, _pll: PLL, params: &SpreadParams) -> Result<(), Error> {
+        let ssc_en = 0x80;
+        let ssc_mode = 0x80;
+        let ss_nclk = 0x0;
+        let ssudp = params.calc_ssudp();
+        let (ssup_p1, ssup_p2, ssup_p3, ssdn_p1, ssdn_p2, ssdn_p3) = params.calc_center_spread();
+        self.write_register_seq(
+            149,
+            &[
+                (ssc_en | (ssdn_p2 >> 8)) as u8,
+                (ssdn_p2 & 0xff) as u8,
+                (ssc_mode | (ssdn_p3 >> 8)) as u8,
+                (ssdn_p3 & 0xff) as u8,
+                (ssdn_p1 & 0xff) as u8,
+                (((ssudp >> 4) & 0xf0) | ((ssdn_p1 >> 8) & 0x0f)) as u8,
+                (ssudp & 0xff) as u8,
+                (ssup_p2 >> 8) as u8,
+                (ssup_p2 & 0xff) as u8,
+                (ssup_p3 >> 8) as u8,
+                (ssup_p3 & 0xff) as u8,
+                (ssup_p1 & 0xff) as u8,
+                (ss_nclk | ((ssup_p1 >> 8) & 0x0f)) as u8,
+            ]
+        )
+    }
 
+    fn set_frequency(&mut self, pll: PLL, clk: ClockOutput, freq: u32, spread: Option<f32>) -> Result<(), Error> {
+
+        let denom: u32 = 1048575;
         let (ms_divider, r_div) = self.find_int_dividers_for_max_pll_freq(900_000_000, freq)?;
         let total_div = ms_divider as u32 * r_div.denominator_u8() as u32;
         let (mult, num) = self.find_pll_coeffs_for_dividers(total_div, denom, freq)?;
@@ -647,6 +643,17 @@ impl<I2C: I2c> Si5351 for Si5351Device<I2C>
             ClockOutput::Clk5 => Multisynth::MS5,
             _ => return Err(Error::InvalidParameter),
         };
+
+        if let Some(spread_percent) = spread {
+            let params = SpreadParams {
+                f_pfd: self.xtal_freq as f32,
+                a: mult as f32,
+                b: num as f32,
+                c: denom as f32,
+                ssc_amp: spread_percent,
+            };
+            self.setup_spread_spectrum(pll, &params)?;
+        }
 
         self.setup_pll(pll, mult, num, denom)?;
         self.setup_multisynth_int(ms, ms_divider, r_div)?;
@@ -791,29 +798,5 @@ impl<I2C: I2c> Si5351 for Si5351Device<I2C>
         self.write_register(reg, current as u8)?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_spread_spectrum() {
-        let params = SpreadParams {
-            f_pfd: 25e6,  // 25 MHz
-            a: 35.0,      // Example multisynth ratio values
-            b: 1.0,
-            c: 73.0,
-            ssc_amp: 0.015, // 1% spread
-        };
-
-        let (ssdn_p1, ssdn_p2, ssdn_p3) = params.calc_down_spread();
-        println!("Down spread: P1={:03X} P2={:04X} P3={:04X}", ssdn_p1, ssdn_p2, ssdn_p3);
-
-        let (ssup_p1, ssup_p2, ssup_p3, ssdn_p1, ssdn_p2, ssdn_p3, ssudp, ssup, ssdn) = params.calc_center_spread();
-        println!("Center spread up: P1={:03X} P2={:04X} P3={:04X}", ssup_p1, ssup_p2, ssup_p3);
-        println!("ssudp={} ssup={} ssdn={}", ssudp, ssup, ssdn);
-        println!("Center spread down: P1={:03X} P2={:04X} P3={:04X}", ssdn_p1, ssdn_p2, ssdn_p3);
     }
 }

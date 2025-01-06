@@ -344,6 +344,7 @@ dependencies = [
  "embedded-graphics",
  "embedded-hal",
  "embedded-hal-nb",
+ "micromath",
  "nb",
  "riscv",
 ]

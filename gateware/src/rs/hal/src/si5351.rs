@@ -482,15 +482,31 @@ impl<I2C: I2c> Si5351Device<I2C> {
             .map_err(i2c_error)
     }
 
-    pub fn write_register_seq(&mut self, base: u8, data: &[u8]) -> Result<(), Error> {
-        let mut addr = base;
-        for d in data {
-            self.i2c
-                .write(self.address, &[addr, *d])
-                .map_err(i2c_error)?;
-            addr += 1;
-        }
-        Ok(())
+    fn write_ssc_registers(
+        &mut self,
+        params: [u8; 13],
+    ) -> Result<(), Error> {
+        self.i2c
+            .write(
+                self.address,
+                &[
+                    0x95,
+                    params[0],
+                    params[1],
+                    params[2],
+                    params[3],
+                    params[4],
+                    params[5],
+                    params[6],
+                    params[7],
+                    params[8],
+                    params[9],
+                    params[10],
+                    params[11],
+                    params[12],
+                ],
+            )
+            .map_err(i2c_error)
     }
 
     fn write_synth_registers<MS: FractionalMultisynth>(
@@ -607,9 +623,8 @@ impl<I2C: I2c> Si5351 for Si5351Device<I2C>
         let ss_nclk = 0x0;
         let ssudp = params.calc_ssudp();
         let (ssup_p1, ssup_p2, ssup_p3, ssdn_p1, ssdn_p2, ssdn_p3) = params.calc_center_spread();
-        self.write_register_seq(
-            149,
-            &[
+        self.write_ssc_registers(
+            [
                 (ssc_en | (ssdn_p2 >> 8)) as u8,
                 (ssdn_p2 & 0xff) as u8,
                 (ssc_mode | (ssdn_p3 >> 8)) as u8,
@@ -798,5 +813,125 @@ impl<I2C: I2c> Si5351 for Si5351Device<I2C>
         self.write_register(reg, current as u8)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use embedded_hal::i2c::{ErrorType, Operation};
+
+    // Mock I2C implementation for testing
+    pub struct MockI2c;
+    
+    impl ErrorType for MockI2c {
+        type Error = std::convert::Infallible;
+    }
+
+    impl I2c for MockI2c {
+        fn write(&mut self, addr: u8, bytes: &[u8]) -> Result<(), Self::Error> {
+            println!("I2c::write(addr=0x{:02X}): {:02X?}", addr, bytes);
+            Ok(())
+        }
+
+        fn write_read(
+            &mut self,
+            address: u8,
+            bytes: &[u8],
+            buffer: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            println!("I2c::write_read(addr=0x{:02X}):", address);
+            println!("  Write: {:02X?}", bytes);
+            println!("  Read buffer size: {}", buffer.len());
+            // Simulate reading device status as ready
+            if bytes[0] == Register::DeviceStatus as u8 {
+                buffer[0] = 0; // Not busy, no errors
+            }
+            Ok(())
+        }
+
+        fn transaction(
+            &mut self,
+            address: u8,
+            operations: &mut [Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            println!("I2c::transaction(addr=0x{:02X}):", address);
+            for (i, op) in operations.iter().enumerate() {
+                match op {
+                    Operation::Read(buffer) => {
+                        println!("  Op {}: Read {} bytes", i, buffer.len());
+                    }
+                    Operation::Write(bytes) => {
+                        println!("  Op {}: Write {:02X?}", i, bytes);
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_frequency_calculations() {
+        let mut si = Si5351Device::new(MockI2c, false, 25_000_000);
+
+        let test_freqs = [
+            1_000_000,
+            12_288_000,
+            74_250_000,
+        ];
+
+        let test_spread = 0.015;
+
+        for freq in test_freqs.iter() {
+            println!("\n=== Target: {} Hz ===", freq);
+
+            let (ms_divider, r_div) = si.find_int_dividers_for_max_pll_freq(900_000_000, *freq)
+                .expect("Failed to find dividers");
+            let total_div = ms_divider as u32 * r_div.denominator_u8() as u32;
+            let denom = 1048575; // Maximum denominator
+            let (mult, num) = si.find_pll_coeffs_for_dividers(total_div, denom, *freq)
+                .expect("Failed to find PLL coefficients");
+
+            let pll_freq = (si.xtal_freq as u64 * mult as u64 
+                + (si.xtal_freq as u64 * num as u64) / denom as u64) as f64;
+            let output_freq = pll_freq / total_div as f64;
+            let freq_error = output_freq - *freq as f64;
+            let relative_error = 100.0 * freq_error.abs() / *freq as f64;
+
+            // Calculate spread spectrum parameters
+            let spread_params = SpreadParams {
+                f_pfd: si.xtal_freq as f32,
+                a: mult as f32,
+                b: num as f32,
+                c: denom as f32,
+                ssc_amp: test_spread,
+            };
+
+            let ssudp = spread_params.calc_ssudp();
+            let (ssup_p1, ssup_p2, ssup_p3, ssdn_p1, ssdn_p2, ssdn_p3) = 
+                spread_params.calc_center_spread();
+
+            println!("ms_divider = {}", ms_divider);
+            println!("r_div = 1/{}", r_div.denominator_u8());
+            println!("total_div = {}", total_div);
+            println!("denom = {}", denom);
+            println!("mult = {}", mult);
+            println!("num = {}", num);
+            println!("pll_freq = {}", pll_freq);
+            println!("output_freq = {}", output_freq);
+            println!("freq_error = {}", freq_error);
+            println!("relative_error = {}%", relative_error);
+            println!("ssudp = {}", ssudp);
+            println!("ssup_p1 = {}", ssup_p1);
+            println!("ssup_p2 = {}", ssup_p2);
+            println!("ssup_p3 = {}", ssup_p3);
+            println!("ssdn_p1 = {}", ssdn_p1);
+            println!("ssdn_p2 = {}", ssdn_p2);
+            println!("ssdn_p3 = {}", ssdn_p3);
+
+            // Try to set the frequency and observe I2C operations
+            si.set_frequency(PLL::A, ClockOutput::Clk0, *freq, Some(test_spread))
+                .expect("Failed to set frequency");
+        }
     }
 }

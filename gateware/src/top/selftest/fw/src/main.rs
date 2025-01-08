@@ -333,6 +333,7 @@ fn main() -> ! {
     info!("si5351 init: {:?}", init);
     info!("si5351 device status: {:?}", si5351drv.read_device_status());
     let set = si5351drv.set_frequency(PLL::A, ClockOutput::Clk0, 12_288_000, Some(0.015));
+    let set = si5351drv.set_frequency(PLL::B, ClockOutput::Clk1, 74_250_000, None);
     info!("si5351 set: {:?}", set);
 
     let mut pca9635 = Pca9635Driver::new(i2cdev2);

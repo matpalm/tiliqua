@@ -16,13 +16,21 @@ pub enum Screen {
     Poly,
     Beam,
     Vector,
+    Usb,
 }
 
 #[derive(Clone, Copy, PartialEq, EnumIter, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub enum TouchControl {
-    On,
     Off,
+    On,
+}
+
+#[derive(Clone, Copy, PartialEq, EnumIter, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum UsbHost {
+    Off,
+    Enable,
 }
 
 #[derive(Clone)]
@@ -37,14 +45,14 @@ impl_option_view!(HelpOptions,
 #[derive(Clone)]
 pub struct PolyOptions {
     pub selected: Option<usize>,
-    pub interface: EnumOption<TouchControl>,
-    pub drive:     NumOption<u16>,
-    pub reso:      NumOption<u16>,
-    pub diffuse:   NumOption<u16>,
+    pub touch_control: EnumOption<TouchControl>,
+    pub drive: NumOption<u16>,
+    pub reso: NumOption<u16>,
+    pub diffuse: NumOption<u16>,
 }
 
 impl_option_view!(PolyOptions,
-                  interface,
+                  touch_control,
                   drive,
                   reso,
                   diffuse);
@@ -73,6 +81,17 @@ impl_option_view!(BeamOptions,
                   persist, decay, intensity, hue, palette);
 
 #[derive(Clone)]
+pub struct UsbOptions {
+    pub selected: Option<usize>,
+    pub host: EnumOption<UsbHost>,
+    pub cfg_id: NumOption<u8>,
+    pub endpt_id: NumOption<u8>,
+}
+
+impl_option_view!(UsbOptions,
+                  host, cfg_id, endpt_id);
+
+#[derive(Clone)]
 pub struct Options {
     pub modify: bool,
     pub draw: bool,
@@ -82,13 +101,15 @@ pub struct Options {
     pub poly:   PolyOptions,
     pub beam:   BeamOptions,
     pub vector: VectorOptions,
+    pub usb: UsbOptions,
 }
 
 impl_option_page!(Options,
                   (Screen::Help,   help),
                   (Screen::Poly,   poly),
                   (Screen::Beam,   beam),
-                  (Screen::Vector, vector));
+                  (Screen::Vector, vector),
+                  (Screen::Usb,    usb));
 
 impl Options {
     pub fn new() -> Options {
@@ -111,7 +132,7 @@ impl Options {
             },
             poly: PolyOptions {
                 selected: None,
-                interface: EnumOption{
+                touch_control: EnumOption{
                     name: String::from_str("touch").unwrap(),
                     value: TouchControl::On,
                 },
@@ -189,6 +210,27 @@ impl Options {
                     max: 15,
                 },
             },
+            usb: UsbOptions {
+                selected: None,
+                host: EnumOption{
+                    name: String::from_str("host").unwrap(),
+                    value: UsbHost::Off,
+                },
+                cfg_id: NumOption{
+                    name: String::from_str("cfg-id").unwrap(),
+                    value: 1,
+                    step: 1,
+                    min: 1,
+                    max: 15,
+                },
+                endpt_id: NumOption{
+                    name: String::from_str("endpt-id").unwrap(),
+                    value: 2,
+                    step: 1,
+                    min: 1,
+                    max: 15,
+                },
+            }
         }
     }
 }

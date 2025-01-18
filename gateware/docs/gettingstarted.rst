@@ -4,6 +4,10 @@ Getting started
 Building example projects
 -------------------------
 
+.. warning::
+
+    For R3 hardware, you will want to additionally pass ``--hw3`` (for R3 hardware / LFE5U-25) to all build commands. Currently R2 hardware is the default.
+
 Each top-level bitstream has a command-line interface. You can see the options by running (for example):
 
 .. code-block:: bash
@@ -43,7 +47,6 @@ Flashing example projects
 -------------------------
 
 .. warning::
-
 
     If you have R2/R3 (prototype) hardware, you may need to reflash the RP2040 and bootloader bitstream  per :doc:`bootloader`, before the following instructions will work.
 

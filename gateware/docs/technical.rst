@@ -4,20 +4,17 @@ Hardware details
 .. image:: _static/tiliqua_disassembled.png
   :width: 800
 
-Audio Interface
----------------
+Schematics and PCBAs
+--------------------
 
-**KiCAD files + schematics here:** `eurorack-pmod R3.3 hardware <https://github.com/apfaudio/eurorack-pmod/tree/master/hardware/schematics>`_
+**Schematics for all Tiliqua revisions in the wild can be found :** `here <https://github.com/apfaudio/tiliqua/tree/main/hardware/schematics>`_
 
-- 8 (4 in + 4 out) DC-coupled audio channels, 192 KHz / 24-bit sampling supported
-- Touch and proximity sensing on all 8 audio jacks (if unused)
-- PWM-controlled, user-programmable red/green LEDs on each audio channel
-- Jack insertion detection on all 8 jacks
+Tiliqua consists of 3 main PCBAs. All of these are open-hardware designs built in KiCAD and stored in separate repositories.
 
-Motherboard
------------
+Motherboard (and front panel)
+-----------------------------
 
-**KiCAD files + schematics here:** `Tiliqua R2 motherboard <https://github.com/apfaudio/tiliqua/tree/main/hardware>`_
+**Repository:** `tiliqua-motherboard <https://github.com/apfaudio/tiliqua/tree/main/hardware>`_
 
 - Switched rotary encoder with bar graph display.
 - Dual USB ports:
@@ -30,14 +27,19 @@ Motherboard
 Embedded FPGA SoM (`soldiercrab`)
 ---------------------------------
 
-**Schematics here :** `SoldierCrab R2 <https://github.com/apfaudio/tiliqua/tree/main/hardware/schematics>`_
-
-.. note::
-
-    SoldierCrab KiCAD files need some cleanup and will be published before the
-    CrowdSupply campaign is launched.
+**Repository:** `soldiercrab <https://github.com/apfaudio/soldiercrab>`_
 
 - Lattice ECP5 (25 K) FPGA, supported by open-source FPGA toolchains
 - 256 Mbit (32 MByte) HyperRAM / oSPI RAM (for long audio buffers or video framebuffers)
 - 128 Mbit (16 MByte) SPI flash for user bitstreams
 - High-speed USB HS PHY (ULPI)
+
+Audio Interface
+---------------
+
+**Repository:** `eurorack-pmod <https://github.com/apfaudio/eurorack-pmod/tree/master/hardware>`_
+
+- 8 (4 in + 4 out) DC-coupled audio channels, 192 KHz / 24-bit sampling supported
+- Touch and proximity sensing on all 8 audio jacks (if unused)
+- PWM-controlled, user-programmable red/green LEDs on each audio channel
+- Jack insertion detection on all 8 jacks

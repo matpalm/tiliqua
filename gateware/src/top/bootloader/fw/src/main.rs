@@ -303,10 +303,10 @@ fn main() -> ! {
                 }
             }
 
-            for _ in 0..10 {
+            for _ in 0..5 {
                 let _ = draw::draw_boot_logo(&mut display,
                                              (H_ACTIVE/2) as i32,
-                                             100 as i32,
+                                             150 as i32,
                                              logo_coord_ix);
                 logo_coord_ix += 1;
             }

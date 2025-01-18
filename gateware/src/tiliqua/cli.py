@@ -10,11 +10,18 @@ import argparse
 import enum
 import git
 import logging
+import json
 import os
 import subprocess
 import sys
+import time
+import tarfile
+from datetime import datetime
+
+from fastcrc import crc32
 
 from tiliqua                     import sim, video
+from tiliqua.types               import *
 from tiliqua.tiliqua_platform    import *
 from tiliqua.tiliqua_soc         import TiliquaSoc
 from vendor.ila                  import AsyncSerialILAFrontend
@@ -22,6 +29,30 @@ from vendor.ila                  import AsyncSerialILAFrontend
 class CliAction(str, enum.Enum):
     Build    = "build"
     Simulate = "sim"
+
+def maybe_flash_firmware(args, kwargs, force_flash=False):
+    print()
+    match args.fw_location:
+        case FirmwareLocation.BRAM:
+            print("Note: Firmware is stored in BRAM, it is not possible to flash firmware "
+                  "and bitstream separately. The bitstream contains the firmware.")
+        case FirmwareLocation.SPIFlash:
+            args_flash_firmware = [
+                "sudo", "openFPGALoader", "-c", "dirtyJtag", "-f", "-o", f"{hex(kwargs['fw_offset'])}",
+                "--file-type", "raw", kwargs["firmware_bin_path"]
+            ]
+            print("SoC is configured for XIP, firmware may be flashed directly to SPI flash by passing "
+                  "the bitstream archive to `pdm flash`, or passing `--flash` to build command.")
+            if args.flash or force_flash:
+                subprocess.check_call(args_flash_firmware, env=os.environ)
+        case FirmwareLocation.PSRAM:
+            print("Note: This bitstream expects firmware already copied from SPI flash to PSRAM "
+                  "by a bootloader.\nPass the bitstream archive to `pdm flash` to flash it.")
+            if args.flash:
+                print("ERROR: direct --flash is only supported for --fw-location=spiflash (XIP). "
+                      "Pass the bitstream archive to `pdm flash` instead.")
+                sys.exit(-1)
+
 
 # TODO: these arguments would likely be cleaner encapsulated in a dataclass that
 # has an instance per-project, that may also contain some bootloader metadata.
@@ -68,13 +99,31 @@ def top_level_cli(
                             help="SoC designs: stop after rust PAC generation")
         parser.add_argument('--fw-only', action='store_true',
                             help="SoC designs: stop after rust FW compilation (optionally re-flash)")
-        parser.add_argument('--fw-spiflash-offset', type=str, default="0xc0000",
-                            help="SoC designs: expect firmware flashed at this address.")
-        # TODO: is this ok on windows?
-        name_default = os.path.normpath(sys.argv[0]).split(os.sep)[2].replace("_", "-").upper()
-        parser.add_argument('--name', type=str, default=name_default,
-                            help="SoC designs: bitstream name to display at bottom of screen.")
+        parser.add_argument("--fw-location",
+                            type=FirmwareLocation,
+                            default=FirmwareLocation.PSRAM.value,
+                            choices=[
+                                FirmwareLocation.BRAM.value,
+                                FirmwareLocation.SPIFlash.value,
+                                FirmwareLocation.PSRAM.value,
+                            ],
+                            help=(
+                                "SoC designs: firmware (.text, .rodata) load strategy. `bram`: firmware "
+                                "is baked into bram in the built bitstream. `spiflash`: firmware is "
+                                "assumed flashed to spiflash at the provided `--fw-offset`. "
+                                "'psram': firmware is assumed already copied to PSRAM (by a bootloader) "
+                                "at the provided `--fw-offset`.")
+                            )
+        parser.add_argument('--fw-offset', type=str, default=None,
+                            help="SoC designs: See `--fw-location`.")
 
+
+    # TODO: is this ok on windows?
+    name_default = os.path.normpath(sys.argv[0]).split(os.sep)[2].replace("_", "-").upper()
+    parser.add_argument('--name', type=str, default=name_default,
+                        help="Bitstream name to display in bootloader and bottom of screen.")
+    parser.add_argument('--brief', type=str, default=None,
+                        help="Brief description to display in bootloader.")
     parser.add_argument('--sc3', action='store_true',
                         help="platform override: Tiliqua R2 with a SoldierCrab R3")
     parser.add_argument('--hw3', action='store_true',
@@ -116,21 +165,36 @@ def top_level_cli(
             kwargs["video_rotate_90"] = True
 
     if issubclass(fragment, TiliquaSoc):
-        # Used during elaboration of the SoC to load the firmware binary into block RAM
         rust_fw_bin  = "firmware.bin"
         rust_fw_root = os.path.join(path, "fw")
         kwargs["firmware_bin_path"] = os.path.join(rust_fw_root, rust_fw_bin)
-        if args.fw_spiflash_offset is not None:
-            kwargs["spiflash_fw_offset"] = int(args.fw_spiflash_offset, 16)
+        kwargs["fw_location"] = args.fw_location
+        if args.fw_offset is None:
+            match args.fw_location:
+                case FirmwareLocation.SPIFlash:
+                    kwargs["fw_offset"] = 0xb0000
+                    print("WARN: firmware loads from SPI flash, but no `--fw-offset` specified. "
+                          f"using default: {hex(kwargs['fw_offset'])}")
+                case FirmwareLocation.PSRAM:
+                    kwargs["fw_offset"] = 0x200000
+                    print("WARN: firmware loads from PSRAM, but no `--fw-offset` specified. "
+                          f"using default: {hex(kwargs['fw_offset'])}")
+        else:
+            kwargs["fw_offset"] = int(args.fw_offset, 16)
         kwargs["ui_name"] = args.name
         kwargs["ui_sha"]  = repo.head.object.hexsha[:6]
 
     if argparse_fragment:
         kwargs = kwargs | argparse_fragment(args)
 
-    name = fragment.__name__ if callable(fragment) else fragment.__class__.__name__
     assert callable(fragment)
     fragment = fragment(**kwargs)
+
+    if args.brief is None:
+        if hasattr(fragment, "brief"):
+            args.brief = fragment.brief
+        else:
+            args.brief = ""
 
     if args.hw3:
         # Tiliqua R3 with SoldierCrab R3
@@ -148,9 +212,89 @@ def top_level_cli(
     # (only used if firmware comes from SPI flash)
     args_flash_firmware = None
 
+    build_path = "build"
+    if not os.path.exists(build_path):
+        os.makedirs(build_path)
+
+    manifest_path = os.path.join(build_path, "manifest.json")
+
+    def write_manifest(regions):
+        manifest = BitstreamManifest(
+            name=args.name,
+            version=BITSTREAM_MANIFEST_VERSION,
+            sha=repo.head.object.hexsha[:6],
+            brief=args.brief,
+            video=args.resolution if hasattr(args, 'resolution') else "<none>",
+            regions=regions
+        )
+        
+        with open(manifest_path, "w") as f:
+            f.write(manifest.to_json())
+            
+        return manifest
+
+    def create_bitstream_archive():
+        hwrev = "r3" if args.hw3 else "r2"
+        archive_name = f"{args.name.lower()}-{repo.head.object.hexsha[:6]}-{hwrev}.tar.gz"
+        archive_path = os.path.join(build_path, archive_name)
+        bitstream_path = "build/top.bit"
+        
+        # Check if we have a bitstream
+        has_bitstream = os.path.exists(bitstream_path)
+        if not has_bitstream:
+            print("\nWARNING: Skipping archive creation - bitstream has not been built")
+            return
+            
+        print(f"\nCreating bitstream archive {archive_name}...")
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(bitstream_path, arcname="top.bit")
+            tar.add(manifest_path, arcname="manifest.json")
+            if isinstance(fragment, TiliquaSoc):
+                tar.add(kwargs["firmware_bin_path"], arcname="firmware.bin")
+        
+        # Print archive contents and size
+        print(f"\nContents:")
+        with tarfile.open(archive_path, "r:gz") as tar:
+            for member in tar.getmembers():
+                print(f"  {member.name:<12} {member.size//1024:>4} KiB")
+        archive_size = os.path.getsize(archive_path)
+        print(f"\nCompressed bitstream archive size: {archive_size//1024} KiB")
+
+        # Print manifest contents
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        print(f"\nManifest contents:\n{json.dumps(manifest, indent=2)}")
+            
+
+    def validate_existing_bitstream(args, manifest_path="build/manifest.json"):
+        """
+        Validate that an existing bitstream matches the current project when using --fw-only.
+        Returns True if validation passes, False if it fails.
+        """
+        if not os.path.exists("build/top.bit"):
+            print("\nERROR: No existing bitstream found at build/top.bit")
+            print("You must build the full project at least once before using --fw-only")
+            return False
+        
+        if not os.path.exists(manifest_path):
+            print("\nERROR: No manifest found at build/manifest.json")
+            print("You must build the full project at least once before using --fw-only") 
+            return False
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+                if manifest.get("name") != args.name:
+                    print(f"\nERROR: Existing bitstream is for '{manifest.get('name')}', "
+                          f"but current project is '{args.name}'")
+                    print("You must build the full project at least once before using --fw-only")
+                    return False
+        except (json.JSONDecodeError, KeyError) as e:
+            print("\nERROR: Failed to validate existing manifest:")
+            print(f"  {str(e)}")
+            return False
+        return True
+
     if isinstance(fragment, TiliquaSoc):
-
-
         # Generate SVD
         svd_path = os.path.join(rust_fw_root, "soc.svd")
         fragment.gensvd(svd_path)
@@ -168,28 +312,40 @@ def top_level_cli(
         fragment.genconst("src/rs/lib/src/generated_constants.rs")
         TiliquaSoc.compile_firmware(rust_fw_root, rust_fw_bin)
 
-        # Generate firmware flashing arguments
-        if kwargs["spiflash_fw_offset"] is not None:
-            fw_path = kwargs["firmware_bin_path"]
-            args_flash_firmware = [
-                "sudo", "openFPGALoader", "-c", "dirtyJtag", "-f", "-o", f"{args.fw_spiflash_offset}",
-                "--file-type", "raw", f"{fw_path}"
-            ]
+        fw_crc32 = crc32.bzip2(open(kwargs["firmware_bin_path"], "rb").read())
+        regions = [
+            MemoryRegion(
+                filename=os.path.basename(kwargs["firmware_bin_path"]),
+                spiflash_src=None,
+                psram_dst=None,
+                size=os.path.getsize(kwargs["firmware_bin_path"]),
+                crc=fw_crc32
+            )
+        ]
+        match args.fw_location:
+            case FirmwareLocation.SPIFlash:
+                regions[-1].spiflash_src = kwargs["fw_offset"]
+            case FirmwareLocation.PSRAM:
+                regions[-1].psram_dst = kwargs["fw_offset"]
 
-        # Optionally stop here if --fw-only is specified
+        # Create firmware-only archive if --fw-only specified
         if args.fw_only:
-            if args_flash_firmware:
-                print("Flash firmware with:")
-                print("\t$", ' '.join(args_flash_firmware))
-                if args.flash:
-                    subprocess.check_call(args_flash_firmware, env=os.environ)
+            if not validate_existing_bitstream(args):
+                sys.exit(1)
+            write_manifest(regions)
+            create_bitstream_archive()
+            maybe_flash_firmware(args, kwargs)
             sys.exit(0)
+        else:
+            write_manifest(regions)
 
         # Simulation configuration
         # By default, SoC examples share the same simulation harness.
         if sim_ports is None:
             sim_ports = sim.soc_simulation_ports
             sim_harness = os.path.join(path, "../selftest/sim.cpp")
+    else:
+        write_manifest(regions=[])
 
     if args.action == CliAction.Simulate:
         sim.simulate(fragment, sim_ports(fragment), sim_harness,
@@ -222,28 +378,18 @@ def top_level_cli(
 
         hw_platform.build(fragment, **build_flags)
 
-        # Print size information and some flashing instructions
-        bitstream_path = "build/top.bit"
-        args_flash_bitstream = ["sudo", "openFPGALoader", "-c", "dirtyJtag", "-f", bitstream_path]
-        bitstream_size = os.path.getsize(bitstream_path)
-        print(f"Bitstream size (@ offset 0x0): {bitstream_size//1024} KiB")
-        if args_flash_firmware:
-            firmware_size = os.path.getsize(args_flash_firmware[-1])
-            # TODO: relative assert based on 'slot' at which bitstream is flashed, not always zero!
-            fw_offset = kwargs["spiflash_fw_offset"]
-            assert fw_offset > bitstream_size, "firmware address overlaps bitstream!"
-            print(f"Firmware size (@ offset {hex(fw_offset)}): {firmware_size//1024} KiB")
-            print("Flash firmware with:")
-            print("\t$", ' '.join(args_flash_firmware))
-        print("Flash bitstream with:")
-        print("\t$", ' '.join(args_flash_bitstream))
+        create_bitstream_archive()
+
+        if isinstance(fragment, TiliquaSoc):
+            maybe_flash_firmware(args, kwargs, force_flash=hw_platform.ila)
 
         if args.flash or hw_platform.ila:
+            bitstream_path = "build/top.bit"
+            args_flash_bitstream = ["sudo", "openFPGALoader", "-c", "dirtyJtag",
+                                    "-f", bitstream_path]
             # ILA situation always requires flashing, as we want to make sure
             # we aren't getting data from an old bitstream before starting the
             # ILA frontend.
-            if args_flash_firmware:
-                subprocess.check_call(args_flash_firmware, env=os.environ)
             subprocess.check_call(args_flash_bitstream, env=os.environ)
 
         if hw_platform.ila:

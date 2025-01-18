@@ -16,6 +16,7 @@ from amaranth.lib          import wiring, data
 from amaranth.lib.wiring   import In, Out
 
 from tiliqua.eurorack_pmod import ASQ
+from tiliqua.types         import FirmwareLocation
 
 class FakeEurorackPmod(wiring.Component):
     """ Fake EurorackPmod. """
@@ -153,16 +154,20 @@ def simulate(fragment, ports, harness, hw_platform, tracing=False):
     else:
         psram_cflags = []
 
-    if hasattr(fragment, "firmware_bin_path"):
-        firmware_cflags = [
+    firmware_cflags = []
+    if hasattr(fragment, "fw_location"):
+        firmware_cflags += [
            "-CFLAGS", f"-DFIRMWARE_BIN_PATH=\\\"{fragment.firmware_bin_path}\\\"",
         ]
-        if fragment.spiflash_fw_base is not None:
-            firmware_cflags += [
-                "-CFLAGS", f"-DSPIFLASH_FW_OFFSET={hex(fragment.spiflash_fw_offset)}",
-            ]
-    else:
-        firmware_cflags = []
+        match fragment.fw_location:
+            case FirmwareLocation.PSRAM:
+                firmware_cflags += [
+                    "-CFLAGS", f"-DPSRAM_FW_OFFSET={hex(fragment.fw_base - fragment.psram_base)}",
+                ]
+            case FirmwareLocation.SPIFlash:
+                firmware_cflags += [
+                    "-CFLAGS", f"-DSPIFLASH_FW_OFFSET={hex(fragment.fw_base - fragment.spiflash_base)}",
+                ]
 
     clock_sync_hz = 60000000
     audio_clk_hz = 48000000

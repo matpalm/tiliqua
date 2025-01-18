@@ -37,29 +37,38 @@ A few examples of building top-level bitstreams:
 
 Generally, bitstreams are also built in CI - check ``.github/workflows`` if you need more gruesome details on how systems are built.
 
+For SoC projects that have firmware, for quicker iteration, ``--fw-only`` is useful to only re-build the firmware for that bitstream and repackage the archive, without re-synthesizing the bitstream (which often takes quite a while).
+
 Flashing example projects
 -------------------------
 
-The built-in RP2040 JTAG debugger is based on the ``dirtyJtag`` project. For non-SoC projects that don't require extra firmware, you can directly flash bitstreams to the SRAM of the FPGA like so:
+.. warning::
+
+
+    If you have R2/R3 (prototype) hardware, you may need to reflash the RP2040 and bootloader bitstream  per :doc:`bootloader`, before the following instructions will work.
+
+When you build projects from the command line, it will create a .tar.gz archive containing the bitstream, firmware (if applicable), and a manifest describing the contents. You can flash bitstreams to one of 8 slots, using the built-in flash tool.
+Such archives may be flashed as follows:
+
+.. code-block:: bash
+
+   # Flash user bitstreams to slots 1-7
+   pdm flash build/selftest-*.tar.gz --slot 1
+   pdm flash build/xbeam-*.tar.gz --slot 2
+
+If you are running an SoC, you can monitor serial output like so:
+
+.. code-block:: bash
+
+   sudo picocom -b 115200 /dev/ttyACM0
+
+For non-SoC projects that don't require extra firmware, you can also directly flash bitstreams to the SRAM of the FPGA like so:
 
 .. code-block:: bash
 
    sudo openFPGALoader -c dirtyJtag build/top.bit
 
-When you build a project from the command line, on completion they will usually print some instructions on how to flash them. For SoC bitstreams, there may be multiple steps (e.g. bitstream and firmware, or other artifacts). You can add the :code:`--flash` option to perform these steps automatically.
-
-.. warning::
-
-    If you flash with to the SPI flash, usually you will want to specify
-    an offset so you don't overwrite the bootloader. See the *Bootloader* section
-    for more information on flash addressing. In any case it's not possible to
-    brick the Tiliqua - so don't be too scared to play!
-
-If you are running an SoC, once you have flashed all artifacts it will give you serial output that you can monitor like so:
-
-.. code-block:: bash
-
-   sudo picocom -b 115200 /dev/ttyACM0
+This can be useful for quickly iterating on DSP gateware.
 
 Simulating DSP cores
 --------------------

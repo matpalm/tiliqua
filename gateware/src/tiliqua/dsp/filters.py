@@ -165,6 +165,42 @@ class DCBlock(wiring.Component):
         return m
 
 
+class OnePole(wiring.Component):
+
+    """
+    Simple lowpass using no multipliers.
+
+    ``output += (input - output) >> shift``
+
+    :py:`shift` is dynamic: 0 is passthrough, higher values give more smoothing.
+    """
+
+    def __init__(self, sq=ASQ, extra_bits=10):
+        self.sq = sq
+        self.sqw = fixed.SQ(sq.i_bits, sq.f_bits + extra_bits)
+        super().__init__({
+            "i": In(stream.Signature(ASQ)),
+            "o": Out(stream.Signature(ASQ)),
+            "shift": In(unsigned(4)),
+        })
+
+    def elaborate(self, platform):
+        m = Module()
+
+        state = Signal(self.sqw)
+        inp = Signal(self.sqw)
+        m.d.comb += [
+            inp.eq(self.i.payload),
+            self.o.valid.eq(self.i.valid),
+            self.i.ready.eq(self.o.ready),
+        ]
+        m.d.sync += self.o.payload.eq(state)
+        with m.If(self.i.valid & self.o.ready):
+            m.d.sync += state.eq(state + ((inp - state) >> self.shift))
+
+        return m
+
+
 class FIR(wiring.Component):
 
     """

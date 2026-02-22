@@ -6,7 +6,7 @@ from amaranth import *
 from amaranth.lib import stream, wiring
 from amaranth.lib.wiring import In, Out
 
-from . import ASQ
+from . import ASQ, asq_from_volts
 
 
 def named_submodules(m_submodules, elaboratables, override_name=None):
@@ -34,6 +34,44 @@ def named_submodules(m_submodules, elaboratables, override_name=None):
         [setattr(m_submodules, f"{type(e).__name__.lower()}{i}", e) for i, e in enumerate(elaboratables)]
     else:
         [setattr(m_submodules, f"{override_name}{i}", e) for i, e in enumerate(elaboratables)]
+
+
+class GateDetector(wiring.Component):
+    """
+    Detect gate transitions from a CV input with hysteresis.
+
+    Output goes high when :py:`i` exceeds :py:`threshold_on` and low
+    when it falls below :py:`threshold_off`.
+    """
+
+    def __init__(self, threshold_on=asq_from_volts(2.0), threshold_off=asq_from_volts(1.0)):
+        self.threshold_on = threshold_on
+        self.threshold_off = threshold_off
+        super().__init__({
+            "i": In(stream.Signature(ASQ)),
+            "o": Out(stream.Signature(unsigned(1))),
+        })
+
+    def elaborate(self, platform):
+        m = Module()
+
+        gate_reg = Signal(init=0)
+
+        m.d.comb += [
+            self.o.payload.eq(gate_reg),
+            self.o.valid.eq(self.i.valid),
+            self.i.ready.eq(self.o.ready),
+        ]
+
+        with m.If(self.i.valid & self.o.ready):
+            with m.If(gate_reg):
+                with m.If(self.i.payload < self.threshold_off):
+                    m.d.sync += gate_reg.eq(0)
+            with m.Else():
+                with m.If(self.i.payload > self.threshold_on):
+                    m.d.sync += gate_reg.eq(1)
+
+        return m
 
 
 class CountingFollower(wiring.Component):

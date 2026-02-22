@@ -241,7 +241,8 @@ class DelayLine(wiring.Component):
             assert fixed_delay is not None
             assert fixed_delay < self.max_delay
         tap = DelayLineTap(parent_bus=self._arbiter.bus, writer_bus=self.internal_writer_bus,
-                           fixed_delay=fixed_delay)
+                           fixed_delay=fixed_delay,
+                           write_triggers_read=self.write_triggers_read)
         self.taps.append(tap)
         self._arbiter.add(tap._bus)
         return tap
@@ -360,9 +361,10 @@ class DelayLineTap(wiring.Component):
         Stream of samples read from the delay line, one per request
         on :py:`DelayLineTap.i`.
     """
-    def __init__(self, parent_bus, writer_bus, fixed_delay=None):
+    def __init__(self, parent_bus, writer_bus, fixed_delay=None, write_triggers_read=True):
 
         self.fixed_delay = fixed_delay
+        self.write_triggers_read = write_triggers_read
         self.max_delay   = 2**parent_bus.addr_width
         self.addr_width  = parent_bus.addr_width
         self.writer_bus  = writer_bus
@@ -390,11 +392,13 @@ class DelayLineTap(wiring.Component):
                     m.next = 'WAIT-VALID'
             with m.State('WAIT-VALID'):
                 m.d.comb += self.i.ready.eq(1)
+                delay = self.i.payload if self.write_triggers_read else \
+                        Mux(self.i.payload == 0, 1, self.i.payload)
                 with m.If(self.i.valid):
-                    with m.If(self.i.payload == 0):
+                    with m.If(delay == 0):
                         m.next = 'ZDELAY'
                     with m.Else():
-                        m.d.sync += bus.adr.eq(self._wrpointer - self.i.payload)
+                        m.d.sync += bus.adr.eq(self._wrpointer - delay)
                         m.next = 'READ'
             with m.State('ZDELAY'):
                 with m.If(self.writer_bus.stb):

@@ -7,7 +7,7 @@
 
 Record audio into a single shared sample buffer (~5 sec). Three
 independent grain channels read from different positions in the same
-buffer. Toggle recording from the Delayline page.
+buffer. Toggle recording from the DELAYLINE page.
 
     .. code-block:: text
 
@@ -24,10 +24,8 @@ buffer. Toggle recording from the Delayline page.
         │out3│──► mix (ch0+ch1+ch2)
         └────┘
 
-When no cable is plugged into a gate input, the corresponding jack
-captouch (1/2/3) acts as a gate instead. If a jack is plugged in,
-gate trigger is 2V with 1V hysteresis. Jack CV may also be used to
-control pitch or scrub grain position, depending on the playback mode:
+Each 'Grain Channel' is independent, with a start and stop position
+and playback mode. The behaviour of touch/CV is different in each mode:
 
     - **Gate**: Play while gate is high. Stop and reset on release.
     - **Oneshot**: Trigger full grain on rising edge. No retrigger mid-grain.
@@ -38,15 +36,25 @@ control pitch or scrub grain position, depending on the playback mode:
     - **ScrubFast**: CV scrubs position within grain.
     - **ScrubSlow**: CV scrubs position (with one-pole filter)
 
-    .. note::
+When no cable is plugged into a gate input, the corresponding jack
+captouch (1/2/3) acts as a gate. If a jack is plugged in, gate trigger
+is 2V with 1V hysteresis. Jack CV may also be used to control pitch or
+scrub grain position, depending on the playback mode.
 
-        WARN: pop prevention is not implemented yet, you might need to fiddle
-        with the grain start/end positions to get clean gates.
+Record may be toggled ON and OFF at any time, to bring in new material
+and freeze the sample buffer. Alternatively, record may be left permanently
+ON and gates triggered while new material is arriving. This can be used for
+slewable delayline and Karplus-strong effects (especially in SCRUB mode).
 
     .. note::
 
         WARN: saving / loading settings and playback buffers happens to a fixed
         region in SPI flash at the moment, which is a bit slow!
+
+    .. note::
+
+        WARN: pop prevention is not implemented yet, you might need to fiddle
+        with the grain start/end positions to get clean gates.
 
 """
 

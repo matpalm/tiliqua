@@ -8,8 +8,6 @@ hal::impl_tiliqua_soc_pac!();
 
 hal::impl_delay_line! {
     DelayLine0: pac::DELAYLN_PERIPH0,
-    DelayLine1: pac::DELAYLN_PERIPH1,
-    DelayLine2: pac::DELAYLN_PERIPH2,
 }
 
 hal::impl_grain_player! {
@@ -19,5 +17,6 @@ hal::impl_grain_player! {
 }
 
 pub mod channel;
+pub mod flash;
 pub mod handlers;
 pub mod options;

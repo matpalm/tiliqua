@@ -28,7 +28,7 @@ Each 'Grain Channel' is independent, with a start and stop position
 and playback mode. The behaviour of touch/CV is different in each mode:
 
     - **Gate**: Play while gate is high. Stop and reset on release.
-    - **Oneshot**: Trigger full grain on rising edge. No retrigger mid-grain.
+    - **Oneshot**: Trigger full grain on rising edge.
     - **Loop**: Continuously loop from start to end (gated by touch/CV).
     - **LoopOn**: Loop with gate stuck on. Touch/CV controls playback speed.
     - **Bounce**: Ping-pong between start and end (gated by touch/CV).

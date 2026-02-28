@@ -265,13 +265,12 @@ macro_rules! impl_spiflash {
                     use $crate::spiflash::SpiFlash;
                     // TODO $crate::nor_flash::check_erase(self, from, to)?;
                     let mut addr = from;
-                    self.write_enable()?;
                     while addr < to {
+                        self.write_enable()?;
                         self.sector_erase(addr)?;
                         while self.busy()? { } // TODO timeout
                         addr += Self::ERASE_SIZE as u32;
                     }
-                    self.write_disable()?;
                     Ok(())
                 }
                 fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
@@ -279,19 +278,18 @@ macro_rules! impl_spiflash {
                     const PAGE_SIZE: usize = 256;
                     let mut written = 0;
                     let mut current_offset = offset;
-                    self.write_enable()?;
                     while written < bytes.len() {
                         let page_offset = (current_offset as usize) % PAGE_SIZE;
                         let bytes_to_write = core::cmp::min(
                                 PAGE_SIZE - page_offset,
                                 bytes.len() - written
                         );
+                        self.write_enable()?;
                         self.page_program(current_offset, &bytes[written..written + bytes_to_write])?;
                         while self.busy()? { } // TODO timeout
                         written += bytes_to_write;
                         current_offset += bytes_to_write as u32;
                     }
-                    self.write_disable()?;
                     Ok(())
                 }
             }

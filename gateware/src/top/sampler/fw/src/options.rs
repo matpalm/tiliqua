@@ -1,12 +1,14 @@
 use opts::*;
 use strum_macros::{EnumIter, IntoStaticStr};
 use serde_derive::{Serialize, Deserialize};
+use tiliqua_lib::palette::ColorPalette;
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
 #[strum(serialize_all = "SCREAMING-KEBAB-CASE")]
 pub enum Page {
     #[default]
     Help,
+    Delayline,
     Channel0,
     Channel1,
     Channel2,
@@ -25,10 +27,10 @@ impl Page {
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
 #[strum(serialize_all = "kebab-case")]
-pub enum GateMode {
+pub enum WaveformView {
     #[default]
-    TouchCV,
-    On,
+    Peaks,
+    Lines,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
@@ -38,7 +40,25 @@ pub enum PlaybackMode {
     Gate,
     Oneshot,
     Loop,
+    LoopOn,
     Bounce,
+    BounceOn,
+    ScrubFast,
+    ScrubSlow,
+}
+
+impl PlaybackMode {
+    pub fn gate_stuck(&self) -> bool {
+        matches!(self, PlaybackMode::LoopOn | PlaybackMode::BounceOn)
+    }
+
+    pub fn scrub_filter_shift(&self) -> u8 {
+        match self {
+            PlaybackMode::ScrubFast => 3,
+            PlaybackMode::ScrubSlow => 12,
+            _ => 0,
+        }
+    }
 }
 
 impl From<PlaybackMode> for tiliqua_hal::grain_player::PlaybackMode {
@@ -48,6 +68,10 @@ impl From<PlaybackMode> for tiliqua_hal::grain_player::PlaybackMode {
             PlaybackMode::Oneshot => Self::Oneshot,
             PlaybackMode::Loop => Self::Loop,
             PlaybackMode::Bounce => Self::Bounce,
+            PlaybackMode::ScrubFast => Self::Scrub,
+            PlaybackMode::ScrubSlow => Self::Scrub,
+            PlaybackMode::LoopOn => Self::Loop,
+            PlaybackMode::BounceOn => Self::Bounce,
         }
     }
 }
@@ -58,6 +82,7 @@ int_params!(LenParams<u32>     { step: 256, min: 0, max: 0x40000, format: IntFor
 int_params!(ZoomParams<u8>     { step: 1, min: 0, max: 4 });
 
 button_params!(ToggleButtonParams { mode: ButtonMode::Toggle });
+button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });
 
 #[derive(OptionPage, Clone)]
 pub struct HelpOpts {
@@ -66,11 +91,21 @@ pub struct HelpOpts {
 }
 
 #[derive(OptionPage, Clone)]
-pub struct ChannelOpts {
+pub struct RecordOpts {
     #[option(false)]
     pub record: ButtonOption<ToggleButtonParams>,
     #[option]
-    pub gate: EnumOption<GateMode>,
+    pub view: EnumOption<WaveformView>,
+    #[option]
+    pub palette: EnumOption<ColorPalette>,
+    #[option(false)]
+    pub save_all: ButtonOption<OneShotButtonParams>,
+    #[option(false)]
+    pub wipe_all: ButtonOption<OneShotButtonParams>,
+}
+
+#[derive(OptionPage, Clone)]
+pub struct ChannelOpts {
     #[option]
     pub mode: EnumOption<PlaybackMode>,
     #[option(false)]
@@ -90,6 +125,8 @@ pub struct Opts {
     pub tracker: ScreenTracker<Page>,
     #[page(Page::Help)]
     pub help: HelpOpts,
+    #[page(Page::Delayline)]
+    pub record: RecordOpts,
     #[page(Page::Channel0)]
     pub channel0: ChannelOpts,
     #[page(Page::Channel1)]

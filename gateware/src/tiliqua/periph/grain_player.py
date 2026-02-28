@@ -25,7 +25,7 @@ class Peripheral(wiring.Component):
 
     class ControlReg(csr.Register, access="rw"):
         gate: csr.Field(csr.action.RW, unsigned(1))
-        mode: csr.Field(csr.action.RW, unsigned(2))
+        mode: csr.Field(csr.action.RW, unsigned(3))
         reverse: csr.Field(csr.action.RW, unsigned(1))
         hw_gate_enable: csr.Field(csr.action.RW, unsigned(1))
 
@@ -57,6 +57,8 @@ class Peripheral(wiring.Component):
             "csr_bus": In(csr.Signature(addr_width=regs.addr_width, data_width=regs.data_width)),
             # Hardware gate used for triggering if `control.hw_gate_enable` is asserted.
             "hw_gate": In(1),
+            # Scrub CV (only used by GrainPlayer in SCRUB mode)
+            "scrub": In(stream.Signature(ASQ)),
             "o": Out(stream.Signature(ASQ)),
         })
 
@@ -85,17 +87,19 @@ class Peripheral(wiring.Component):
             self._status.f.position.r_data.eq(grain_player.position),
         ]
 
+        wiring.connect(m, wiring.flipped(self.scrub), grain_player.scrub)
         wiring.connect(m, grain_player.o, wiring.flipped(self.o))
 
         return m
 
 class GrainPlayer(wiring.Component):
 
-    class Mode(enum.Enum, shape=unsigned(2)):
+    class Mode(enum.Enum, shape=unsigned(3)):
         GATE    = 0  # Play while gate high, stop when low, reset on rising edge
         ONESHOT = 1  # Play full length ignoring gate, restart on rising edge
         LOOP    = 2  # Loop while gate high, stop when low, reset on rising edge
-        BOUNCE  = 3  # Like loop but alternate direction at boundaries
+        BOUNCE  = 3  # Loop, swap direction at boundaries
+        SCRUB   = 4  # CV input directly controls playback position
 
     def __init__(self, delayln, sq=ASQ):
         self.delayln = delayln
@@ -110,9 +114,10 @@ class GrainPlayer(wiring.Component):
             "speed": In(fixed.UQ(8, 8)),
             "start": In(unsigned(self.delayln.address_width)),
             "length": In(unsigned(self.delayln.address_width)),
+            "scrub": In(stream.Signature(sq)), # Scrub CV (only used in SCRUB mode)
             # Status
             "position": Out(unsigned(self.delayln.address_width)),
-            # Outgoing sample stream
+            # Outgoing samples
             "o": Out(stream.Signature(sq)),
         })
 
@@ -123,28 +128,36 @@ class GrainPlayer(wiring.Component):
         start    = Signal.like(self.start)
         length   = Signal.like(self.length)
         mode     = Signal.like(self.mode)
-        l_gate   = Signal.like(self.gate)
         reverse  = Signal.like(self.reverse)
         bouncing = Signal()  # Toggles fwd/rev in BOUNCE mode
         pos      = Signal(fixed.UQ(len(self.length), 8))
 
+        # Linear interpolation
+        sample0   = Signal(self.sq)  # sample at integer position
+        tap_addr0 = Signal.like(self.start)  # tap address for first fetch
+        tap_addr1 = Signal.like(self.start)  # tap address for adjacent sample
+
+        # Gate state tracking
+        l_gate = Signal()
+        gate_rising_latch = Signal()
         m.d.sync += l_gate.eq(self.gate)
+        m.d.sync += gate_rising_latch.eq(gate_rising_latch | (~l_gate & self.gate))
 
-        # Bouncing toggles between forward/reverse
-        eff_reverse = Signal()
-        m.d.comb += eff_reverse.eq(reverse ^ bouncing)
-
-        gate_rising = Signal()
-        m.d.comb += gate_rising.eq(~l_gate & self.gate)
+        # Keep scrub stream drained, as we aren't consuming it outside of SCRUB mode.
+        m.d.comb += self.scrub.ready.eq(mode != GrainPlayer.Mode.SCRUB)
 
         with m.FSM():
             with m.State('WAIT-READY-ZERO'):
-                m.d.comb += [
-                    self.o.valid.eq(1),
-                    self.o.payload.eq(0),
-                ]
-                with m.If(gate_rising):
+                with m.If(self.mode == GrainPlayer.Mode.SCRUB):
+                    # don't wait on gate in scrub mode
                     m.next = 'START-GATE'
+                with m.Else():
+                    # no active gate: output stream of zero samples
+                    m.d.comb += self.o.valid.eq(1)
+                    m.d.sync += self.o.payload.eq(0)
+                    with m.If(gate_rising_latch):
+                        m.d.sync += gate_rising_latch.eq(0)
+                        m.next = 'START-GATE'
             with m.State('START-GATE'):
                 m.d.sync += [
                     reverse.eq(self.reverse),
@@ -154,55 +167,94 @@ class GrainPlayer(wiring.Component):
                     pos.eq(0),
                     bouncing.eq(0),
                 ]
-                m.next = 'FETCH-SAMPLE'
-            with m.State('FETCH-SAMPLE'):
+                m.next = 'COMPUTE-ADDR'
+            with m.State('COMPUTE-ADDR'):
+                with m.If(mode == GrainPlayer.Mode.SCRUB):
+                    m.next = 'COMPUTE-ADDR-SCRUB'
+                with m.Elif(reverse ^ bouncing): # toggles fwd/rev in BOUNCE mode
+                    m.next = 'COMPUTE-ADDR-REVERSE'
+                with m.Else():
+                    m.next = 'COMPUTE-ADDR-FORWARD'
+            with m.State('COMPUTE-ADDR-SCRUB'):
+                # Map scrub CV from -1..1 to 0..grain_length.
+                # Also consume a single scrub sample.
+                m.d.comb += self.scrub.ready.eq(1)
+                scrub_norm = (self.scrub.payload + fixed.Const(1.0)) >> 1
+                m.d.sync += pos.eq(length * scrub_norm)
+                with m.If(self.scrub.valid):
+                    m.next = 'COMPUTE-ADDR-FORWARD'
+            with m.State('COMPUTE-ADDR-REVERSE'):
+                delay = start - length + pos.truncate().as_value() + 1
+                m.d.sync += [
+                    tap_addr0.eq(delay),
+                    tap_addr1.eq(delay + 1),
+                    self.position.eq(delay),
+                ]
+                m.next = 'TAP0-ADDR'
+            with m.State('COMPUTE-ADDR-FORWARD'):
+                delay = start - pos.truncate().as_value()
+                m.d.sync += [
+                    tap_addr0.eq(delay),
+                    tap_addr1.eq(delay - 1),
+                    self.position.eq(delay),
+                ]
+                m.next = 'TAP0-ADDR'
+            with m.State('TAP0-ADDR'):
                 m.d.comb += [
                     self.tap.i.valid.eq(1),
+                    self.tap.i.payload.eq(tap_addr0),
                 ]
-                with m.If(eff_reverse):
-                    delay = start-length+pos.truncate()+1
-                    m.d.comb += self.tap.i.payload.eq(delay),
-                    m.d.sync += self.position.eq(delay)
-                with m.Else():
-                    delay = start-pos.truncate()
-                    m.d.comb += self.tap.i.payload.eq(delay),
-                    m.d.sync += self.position.eq(delay)
                 with m.If(self.tap.i.ready):
-                    m.next = 'OUTPUT-SAMPLE'
-            with m.State('OUTPUT-SAMPLE'):
-                wiring.connect(m, self.tap.o, wiring.flipped(self.o))
-                with m.If(self.tap.o.valid & self.tap.o.ready):
-                    # Always restart on rising edge
-                    with m.If(gate_rising):
+                    m.next = 'TAP0-READ'
+            with m.State('TAP0-READ'):
+                m.d.comb += self.tap.o.ready.eq(1)
+                with m.If(self.tap.o.valid):
+                    m.d.sync += sample0.eq(self.tap.o.payload)
+                    m.next = 'TAP1-ADDR'
+            with m.State('TAP1-ADDR'):
+                m.d.comb += [
+                    self.tap.i.valid.eq(1),
+                    self.tap.i.payload.eq(tap_addr1),
+                ]
+                with m.If(self.tap.i.ready):
+                    m.next = 'TAP1-READ-INTERP'
+            with m.State('TAP1-READ-INTERP'):
+                m.d.comb += self.tap.o.ready.eq(1)
+                # Linear interpolation: output = sample0 + frac * (sample1 - sample0)
+                frac = pos - pos.truncate()
+                diff = self.tap.o.payload - sample0
+                m.d.sync += self.o.payload.eq(sample0 + diff * frac)
+                with m.If(self.tap.o.valid):
+                    m.next = 'OUT'
+            with m.State('OUT'):
+                m.d.comb += self.o.valid.eq(1)
+                with m.If(self.o.ready):
+                    # Always restart in SCRUB
+                    with m.If(mode == GrainPlayer.Mode.SCRUB):
                         m.next = 'START-GATE'
-                    with m.Elif(~self.gate):
-                        with m.If(mode == GrainPlayer.Mode.ONESHOT):
-                            # ONESHOT: continue playing even if gate low
-                            with m.If(pos.truncate() >= (length-1)):
-                                m.next = 'WAIT-READY-ZERO'
-                            with m.Else():
-                                m.d.sync += pos.eq(pos+self.speed)
-                                m.next = 'FETCH-SAMPLE'
-                        with m.Else():
-                            # GATE, LOOP, BOUNCE: stop when gate low
-                            m.next = 'WAIT-READY-ZERO'
+                    # Retrigger on rising edge
+                    with m.Elif(gate_rising_latch):
+                        m.d.sync += gate_rising_latch.eq(0)
+                        m.next = 'START-GATE'
+                    # ONESHOT ignores gate-low; all others stop.
+                    with m.Elif(~self.gate & (mode != GrainPlayer.Mode.ONESHOT)):
+                        m.next = 'WAIT-READY-ZERO'
                     # End of grain
                     with m.Elif(pos.truncate() >= (length-1)):
-                        with m.If(mode == GrainPlayer.Mode.GATE):
-                            m.next = 'WAIT-READY-ZERO'
-                        with m.Elif(mode == GrainPlayer.Mode.ONESHOT):
+                        with m.If((mode == GrainPlayer.Mode.GATE) | (mode == GrainPlayer.Mode.ONESHOT)):
                             m.next = 'WAIT-READY-ZERO'
                         with m.Elif(mode == GrainPlayer.Mode.LOOP):
                             m.next = 'START-GATE'
                         with m.Elif(mode == GrainPlayer.Mode.BOUNCE):
-                            # Toggle direction, reset position
-                            m.d.sync += [
-                                bouncing.eq(~bouncing),
-                                pos.eq(0),
-                            ]
-                            m.next = 'FETCH-SAMPLE'
+                            m.d.sync += bouncing.eq(~bouncing)
+                            with m.If(bouncing):
+                                # Back to start: re-latch parameters
+                                m.next = 'START-GATE'
+                            with m.Else():
+                                m.d.sync += pos.eq(0)
+                                m.next = 'COMPUTE-ADDR'
                     with m.Else():
                         m.d.sync += pos.eq(pos+self.speed)
-                        m.next = 'FETCH-SAMPLE'
+                        m.next = 'COMPUTE-ADDR'
 
         return m

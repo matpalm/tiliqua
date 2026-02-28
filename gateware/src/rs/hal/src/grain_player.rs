@@ -4,6 +4,7 @@ pub enum PlaybackMode {
     Oneshot = 1,
     Loop = 2,
     Bounce = 3,
+    Scrub = 4,
 }
 
 pub trait GrainPlayer {

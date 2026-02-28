@@ -1,56 +1,76 @@
 use tiliqua_hal::delay_line::DelayLine;
 use tiliqua_hal::grain_player::GrainPlayer;
-use crate::options::{ChannelOpts, GateMode};
+use crate::options::{ChannelOpts, PlaybackMode};
+use micromath::F32Ext;
 
-pub struct Channel<D: DelayLine, G: GrainPlayer> {
-    pub delayln: D,
+pub struct Channel<G: GrainPlayer> {
     pub grain: G,
     l_gate: bool,
+    l_mode: PlaybackMode,
+    l_start: u32,
+    l_len: u32,
 }
 
-impl<D: DelayLine, G: GrainPlayer> Channel<D, G> {
-    pub fn new(delayln: D, grain: G) -> Self {
-        Self { delayln, grain, l_gate: false }
+impl<G: GrainPlayer> Channel<G> {
+    pub fn new(grain: G) -> Self {
+        Self { grain, l_gate: false, l_mode: PlaybackMode::default(), l_start: 0, l_len: 0 }
     }
 
     /// Update grain player from channel options and input state
-    pub fn update(&mut self, opts: &ChannelOpts, touch_idx: usize, touch: &[u8; 8], jack: u8) {
-        let size = self.delayln.size_samples() as u32;
+    pub fn update(&mut self, opts: &ChannelOpts, max_samples: u32, touch_idx: usize, touch: &[u8; 8], jack: u8, cv: i16) {
+        let size = max_samples;
         let ui_start = (opts.start.value as i32).max(5) as u32;
         let start = size.saturating_sub(ui_start);
         let max_length = start.saturating_sub(2);
         let length = ((opts.len.value as i32).max(0) as u32).min(max_length);
 
-        self.grain.set_params(opts.speed.value, start, length);
-
-        // Gate logic with hysteresis
+        // In gate-stuck modes: jack CV controls speed (1V/oct, 3V = 1.0x),
+        // or touch scales from 1x to 2x the UI speed value.
         let jack_plugged = (jack & (1 << touch_idx)) != 0;
-        let (gate, hw_gate_enable) = match opts.gate.value {
-            GateMode::On => (true, false),
-            GateMode::TouchCV => {
-                if jack_plugged {
-                    (false, true)
-                } else {
-                    let touch_gate = if self.l_gate {
-                        touch[touch_idx] >= 150
-                    } else {
-                        touch[touch_idx] > 200
-                    };
-                    (touch_gate, false)
-                }
-            }
+        let speed = if opts.mode.value.gate_stuck() && jack_plugged {
+            let volts = cv as f32 / 4000.0;
+            (256.0 * (2.0f32).powf(volts - 3.0)).clamp(32.0, 1024.0) as u16
+        } else if opts.mode.value.gate_stuck() {
+            let t = touch[touch_idx] as u32;
+            (opts.speed.value as u32 * (256 + t) / 256) as u16
+        } else {
+            opts.speed.value
+        };
+        self.grain.set_params(speed, start, length);
+
+        // Pulse gate low for one tick on mode/start/len change to force a rising edge restart
+        let mode_changed = opts.mode.value != self.l_mode;
+        let params_changed = opts.start.value != self.l_start || opts.len.value != self.l_len;
+        self.l_mode = opts.mode.value;
+        self.l_start = opts.start.value;
+        self.l_len = opts.len.value;
+
+        // Gate logic with hysteresis (always touch/CV, unless mode has gate stuck on)
+        let (gate, hw_gate_enable) = if mode_changed || params_changed {
+            (false, false)
+        } else if opts.mode.value.gate_stuck() {
+            (true, false)
+        } else if jack_plugged {
+            (false, true)
+        } else {
+            let touch_gate = if self.l_gate {
+                touch[touch_idx] >= 150
+            } else {
+                touch[touch_idx] > 200
+            };
+            (touch_gate, false)
         };
         self.l_gate = gate;
 
         self.grain.set_control(opts.mode.value.into(), gate, hw_gate_enable, opts.reverse.value);
     }
 
-    pub fn view(&self) -> ChannelView {
+    pub fn view<D: DelayLine>(&self, delayln: &D) -> ChannelView {
         ChannelView {
             grain_position: self.grain.position(),
-            delayln_max_samples: self.delayln.size_samples(),
-            delayln_base: self.delayln.data_ptr(),
-            delayln_wrpointer: self.delayln.wrpointer(),
+            delayln_max_samples: delayln.size_samples(),
+            delayln_base: delayln.data_ptr(),
+            delayln_wrpointer: delayln.wrpointer(),
         }
     }
 }
@@ -64,6 +84,15 @@ pub struct ChannelView {
 }
 
 impl ChannelView {
+    pub fn from_delayln<D: DelayLine>(delayln: &D) -> Self {
+        Self {
+            grain_position: 0,
+            delayln_max_samples: delayln.size_samples(),
+            delayln_base: delayln.data_ptr(),
+            delayln_wrpointer: delayln.wrpointer(),
+        }
+    }
+
     pub fn grain_start_delay(&self, opts: &ChannelOpts) -> usize {
         let ui_start = (opts.start.value as i32).max(0) as usize;
         self.delayln_max_samples.saturating_sub(ui_start)
@@ -156,6 +185,13 @@ impl ChannelView {
         let start_delay = self.waveform_start_delay(opts, n_samples, center_on_end);
         let stride = self.stride(opts, n_samples);
         self.delayln_read_samples(buf, start_delay, stride);
+        // Zero out samples whose delay falls outside the buffer
+        for i in 0..n_samples {
+            let delay = start_delay as isize - (i as isize * stride as isize);
+            if delay < 0 || delay as usize > self.delayln_max_samples {
+                buf[i] = 0;
+            }
+        }
     }
 
     pub fn playback_position(&self) -> usize {

@@ -14,6 +14,10 @@ from amaranth_future import fixed
 # Signed fixed point, where -1 to +1 represents -8.192V to +8.192V.
 ASQ = fixed.SQ(1, int(os.environ.get('TILIQUA_ASQ_WIDTH', '16')) - 1)
 
+def asq_from_volts(volts):
+    """Convert a voltage to a ``fixed.Const`` of shape ``ASQ`` (4 counts/mV)."""
+    return fixed.Const(volts / 8.192, shape=ASQ)
+
 # Components that are accessed using `dsp.fft.STFT()`-like pattern (qualified)
 from . import block, complex, delay_effect, fft, mac, spectral
 

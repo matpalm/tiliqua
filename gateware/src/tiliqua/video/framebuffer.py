@@ -6,7 +6,7 @@
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.lib import wiring
+from amaranth.lib import data, wiring
 from amaranth.lib.cdc import FFSynchronizer
 from amaranth.lib.fifo import AsyncFIFOBuffered
 from amaranth.lib.wiring import In, Out
@@ -15,7 +15,7 @@ from amaranth_soc import csr, wishbone
 
 from ..build import sim
 from . import dvi
-from .types import Pixel, Rotation
+from .types import Pixel, Rotation, ScanPixel
 
 
 class DMAFramebuffer(wiring.Component):
@@ -59,7 +59,7 @@ class DMAFramebuffer(wiring.Component):
             })
 
     def __init__(self, *, palette, addr_width=22, fifo_depth=512,
-                 burst_threshold_words=128, fixed_modeline=None):
+                 burst_threshold_words=128, fixed_modeline=None, overlay=None):
 
         self.fifo_depth = fifo_depth
         assert (Pixel.as_shape().size % 8) == 0
@@ -67,6 +67,7 @@ class DMAFramebuffer(wiring.Component):
         self.burst_threshold_words = burst_threshold_words
         self.fixed_modeline = fixed_modeline
         self.palette = palette
+        self._overlay = overlay
 
         super().__init__({
             # Backing store
@@ -151,9 +152,10 @@ class DMAFramebuffer(wiring.Component):
                     m.d.sync += burst_cnt.eq(0)
                     m.next = 'BURST'
 
-        # Tracking in DVI domain
+        # -- DVI domain pixel stream to PHY --
 
-        # 'dvi' domain: read FIFO -> DVI PHY (1 fifo word is N pixels)
+        # Stage 1: FIFO read -> ScanPixel
+        # (1 FIFO word is N pixels, extracted byte-by-byte)
         bytecounter = Signal(exact_log2(4//self.bytes_per_pixel))
         last_word   = Signal(32)
         with m.If(dvi_tgen.ctrl.vsync):
@@ -166,34 +168,40 @@ class DMAFramebuffer(wiring.Component):
             with m.Else():
                 m.d.dvi += last_word.eq(last_word >> 8)
 
-        # Index by intensity (4-bit) and color (4-bit)
+        # 1-cycle delayed x/y to align with last_word
+        pixel_x = Signal(signed(12))
+        pixel_y = Signal(signed(12))
+        m.d.dvi += pixel_x.eq(dvi_tgen.x)
+        m.d.dvi += pixel_y.eq(dvi_tgen.y)
+
+        # Stage 1.5: Optional beamracing overlay (ScanPixel -> ScanPixel)
+        if self._overlay is not None:
+            first_input = self._overlay.i
+            m.d.comb += self.palette.i.eq(self._overlay.o)
+        else:
+            first_input = self.palette.i
+
         m.d.comb += [
-            self.palette.pixel_in.eq(Cat(last_word[0:4], last_word[4:8])),
+            first_input.pixel.eq(last_word[:Pixel.as_shape().size]),
+            first_input.x.eq(pixel_x),
+            first_input.y.eq(pixel_y),
+            first_input.de.eq(dvi_tgen.ctrl_phy.de),
+            first_input.hsync.eq(dvi_tgen.ctrl_phy.hsync),
+            first_input.vsync.eq(dvi_tgen.ctrl_phy.vsync),
         ]
 
+        # Stage 2/3: Palette and DVI PHY / simulation output
         if sim.is_hw(platform):
-            # Instantiate the DVI PHY itself
             m.submodules.dvi_gen = dvi_gen = dvi.DVIPHY()
-            m.d.dvi += [
-                dvi_gen.de.eq(dvi_tgen.ctrl_phy.de),
-                # RGB -> TMDS
-                dvi_gen.data_in_ch0.eq(self.palette.pixel_out.b),
-                dvi_gen.data_in_ch1.eq(self.palette.pixel_out.g),
-                dvi_gen.data_in_ch2.eq(self.palette.pixel_out.r),
-                # VSYNC/HSYNC -> TMDS
-                dvi_gen.ctrl_in_ch0.eq(Cat(dvi_tgen.ctrl_phy.hsync, dvi_tgen.ctrl_phy.vsync)),
-                dvi_gen.ctrl_in_ch1.eq(0),
-                dvi_gen.ctrl_in_ch2.eq(0),
-            ]
+            m.d.comb += dvi_gen.i.eq(self.palette.o)
         else:
-            # hook up simif
             m.d.comb += [
-                self.simif.de.eq(dvi_tgen.ctrl_phy.de),
-                self.simif.vsync.eq(dvi_tgen.ctrl_phy.vsync),
-                self.simif.hsync.eq(dvi_tgen.ctrl_phy.hsync),
-                self.simif.r.eq(self.palette.pixel_out.r),
-                self.simif.g.eq(self.palette.pixel_out.g),
-                self.simif.b.eq(self.palette.pixel_out.b),
+                self.simif.de.eq(self.palette.o.de),
+                self.simif.vsync.eq(self.palette.o.vsync),
+                self.simif.hsync.eq(self.palette.o.hsync),
+                self.simif.r.eq(self.palette.o.r),
+                self.simif.g.eq(self.palette.o.g),
+                self.simif.b.eq(self.palette.o.b),
             ]
 
         return m

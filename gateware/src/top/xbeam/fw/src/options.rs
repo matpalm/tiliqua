@@ -59,6 +59,15 @@ pub enum HelpPage {
     On,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
+#[strum(serialize_all = "kebab-case")]
+pub enum GridOverlay {
+    Off,
+    Grid,
+    #[default]
+    Cross,
+}
+
 int_params!(DelayParams<u16>      { step: 8, min: 0, max: 512, format: IntFormat::Scaled { divisor: AUDIO_FS / 1000, precision: 1, suffix: "ms" } });
 int_params!(PCScaleParams<u8>     { step: 1, min: 0, max: 15 });
 int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
@@ -119,6 +128,10 @@ pub struct BeamOpts {
     pub ui_hue: IntOption<HueParams>,
     #[option]
     pub palette: EnumOption<ColorPalette>,
+    #[option]
+    pub grid: EnumOption<GridOverlay>,
+    #[option(2)]
+    pub grid_i: IntOption<IntensityParams>,
 }
 
 #[derive(OptionPage, Clone)]

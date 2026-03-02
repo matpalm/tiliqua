@@ -138,9 +138,25 @@ fn main() -> ! {
         let mut vscope = Vector0::new(peripherals.VECTOR_PERIPH);
         let mut scope = Scope0::new(peripherals.SCOPE_PERIPH, 6);
         let xbeam_mux = peripherals.XBEAM_PERIPH;
+        let overlay_periph = peripherals.OVERLAY_PERIPH;
         let mut first = true;
 
         let mut usb_cc_attached = false;
+
+        // Grid overlay configuration (ppd is constant after init)
+        let (ppd_x, ppd_y) = vscope.pixels_per_div();
+        overlay_periph.grid_spacing().write(|w| unsafe {
+            w.spacing_x().bits(ppd_x as u8);
+            w.spacing_y().bits(ppd_y as u8)
+        });
+        overlay_periph.grid_start().write(|w| unsafe {
+            w.start_x().bits(((display.size().width / 2) % ppd_x) as u8);
+            w.start_y().bits((((display.size().height / 2) + 1) % ppd_y) as u8)
+        });
+        overlay_periph.grid_offset().write(|w| unsafe {
+            w.offset_x().bits((display.size().width / 2) as u16);
+            w.offset_y().bits((display.size().height / 2) as u16)
+        });
 
         loop {
 
@@ -244,6 +260,19 @@ fn main() -> ! {
                       w.show_outputs().bit(opts.misc.plot_src.value == PlotSrc::Outputs);
                       w.usb_connect().bit(usb_cc_attached)
                 } );
+
+            // Grid overlay style/pixel (changes with options)
+            let grid_style: u8 = if on_help_page { 0 } else {
+                match opts.beam.grid.value {
+                    GridOverlay::Off => 0,
+                    GridOverlay::Grid => 1,
+                    GridOverlay::Cross => 2,
+                }
+            };
+            overlay_periph.flags().write(|w| unsafe {
+                w.grid_style().bits(grid_style);
+                w.grid_pixel().bits(((opts.beam.grid_i.value as u8) << 4) | opts.beam.ui_hue.value)
+            });
 
             xbeam_mux.delay0().write(|w| unsafe { w.value().bits(
                     delay_smoothers[0].proc_u16(opts.delay.delay_x.value)) });

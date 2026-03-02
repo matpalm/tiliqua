@@ -12,6 +12,8 @@ from amaranth.lib.memory import Memory
 from amaranth.lib.wiring import In, Out
 from amaranth_soc import csr
 
+from .types import ScanPixel, DVIPixel
+
 
 def compute_color_palette():
     """
@@ -36,23 +38,22 @@ def compute_color_palette():
 
     return rs, gs, bs
 
+
 class ColorPalette(wiring.Component):
     """
-    Manages a 256-color palette with 8-bit RGB values.
-    Format is: 1-byte in, 3-bytes (RGB) out.
-    Each 8-bit pixel input is interpreted as 4 bits of intensity and 4 bits of color.
+    ScanPixel -> DVIPixel palette transform with updatable palette.
+
+    Maps 8-bit pixels (4-bit intensity + 4-bit color) to 24-bit RGB via
+    a 256-entry lookup table. The palette can be updated at runtime via
+    the ``update`` stream interface.
     """
 
     def __init__(self):
-        """Initialize the color palette component."""
         super().__init__({
-            # Pixel input and RGB output
-            "pixel_in": In(8),  # 4 bits intensity, 4 bits color
-            "pixel_out": Out(data.StructLayout({
-                "r": unsigned(8),
-                "g": unsigned(8),
-                "b": unsigned(8),
-            })),
+            # Pre-palette pixel (1 per dvi clock)
+            "i": In(ScanPixel),
+            # Post-palette pixel (1 per dvi clock)
+            "o": Out(DVIPixel),
             # Palette update interface
             "update": In(stream.Signature(data.StructLayout({
                 "position": unsigned(8),
@@ -71,21 +72,27 @@ class ColorPalette(wiring.Component):
         m.submodules.palette_g = palette_g = Memory(shape=unsigned(8), depth=256, init=gs)
         m.submodules.palette_b = palette_b = Memory(shape=unsigned(8), depth=256, init=bs)
 
-        # Read ports
+        # Read ports (combinatorial lookup)
         rd_port_r = palette_r.read_port(domain="comb")
         rd_port_g = palette_g.read_port(domain="comb")
         rd_port_b = palette_b.read_port(domain="comb")
 
-        # Connect read ports to address and output signals
-        m.d.comb += [
-            rd_port_r.addr.eq(self.pixel_in),
-            rd_port_g.addr.eq(self.pixel_in),
-            rd_port_b.addr.eq(self.pixel_in),
+        pixel_in = Cat(self.i.pixel.color, self.i.pixel.intensity)
 
-            # Connect output signals
-            self.pixel_out.r.eq(rd_port_r.data),
-            self.pixel_out.g.eq(rd_port_g.data),
-            self.pixel_out.b.eq(rd_port_b.data),
+        m.d.comb += [
+            rd_port_r.addr.eq(pixel_in),
+            rd_port_g.addr.eq(pixel_in),
+            rd_port_b.addr.eq(pixel_in),
+        ]
+
+        # Pass through sync signals, replace pixel with RGB
+        m.d.comb += [
+            self.o.r.eq(rd_port_r.data),
+            self.o.g.eq(rd_port_g.data),
+            self.o.b.eq(rd_port_b.data),
+            self.o.de.eq(self.i.de),
+            self.o.hsync.eq(self.i.hsync),
+            self.o.vsync.eq(self.i.vsync),
         ]
 
         # Write ports for palette updates
@@ -93,7 +100,6 @@ class ColorPalette(wiring.Component):
         wport_g = palette_g.write_port()
         wport_b = palette_b.write_port()
 
-        # Connect write ports to stream interface
         wports = [wport_r, wport_g, wport_b]
         m.d.comb += [
             wports[0].data.eq(self.update.payload.red),
@@ -102,7 +108,6 @@ class ColorPalette(wiring.Component):
         ]
         m.d.comb += self.update.ready.eq(1)
 
-        # Connect address and enable for all ports
         for wport in wports:
             with m.If(self.update.ready):
                 m.d.comb += [

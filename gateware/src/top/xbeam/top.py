@@ -102,6 +102,7 @@ from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.periph import eurorack_pmod
+from tiliqua.periph import overlay
 from tiliqua.raster import scope
 from tiliqua.raster.plot import FramebufferPlotter
 from tiliqua.tiliqua_soc import TiliquaSoc
@@ -188,14 +189,18 @@ class XbeamSoc(TiliquaSoc):
 
     def __init__(self, **kwargs):
 
+        self.overlay_periph = overlay.Peripheral()
+
         # don't finalize the CSR bridge in TiliquaSoc, we're adding more peripherals.
-        super().__init__(finalize_csr_bridge=False, **kwargs)
+        super().__init__(finalize_csr_bridge=False,
+                         fb_overlay=self.overlay_periph.overlay, **kwargs)
 
         # Extract module docstring for help page
 
         self.vector_periph_base = 0x00001000
         self.scope_periph_base  = 0x00001100
         self.xbeam_periph_base  = 0x00001200
+        self.overlay_periph_base = 0x00001300
 
         # Dedicated framebuffer plotter for scope peripherals (5 ports: 1 vector + 4 scope channels)
         self.plotter = FramebufferPlotter(
@@ -217,6 +222,9 @@ class XbeamSoc(TiliquaSoc):
         self.xbeam_periph = XbeamPeripheral()
         self.csr_decoder.add(self.xbeam_periph.bus, addr=self.xbeam_periph_base, name="xbeam_periph")
 
+        # Grid overlay peripheral
+        self.csr_decoder.add(self.overlay_periph.bus, addr=self.overlay_periph_base, name="overlay_periph")
+
         # now we can freeze the memory map
         self.finalize_csr_bridge()
 
@@ -231,13 +239,14 @@ class XbeamSoc(TiliquaSoc):
         m.submodules.vector_periph = self.vector_periph
         m.submodules.scope_periph = self.scope_periph
         m.submodules.xbeam_periph = self.xbeam_periph
+        m.submodules.overlay_periph = self.overlay_periph
 
         # Connect vector/scope pixel requests to plotter channels
         wiring.connect(m, self.vector_periph.o, self.plotter.i[0])
         for n in range(4):
             wiring.connect(m, self.scope_periph.o[n], self.plotter.i[n+1])
 
-        # Connect framebuffer propreties to plotter backend
+        # Connect framebuffer properties to plotter backend
         wiring.connect(m, wiring.flipped(self.fb.fbp), self.plotter.fbp)
 
         # FIXME: bit of a hack so we can pluck out peripherals from `tiliqua_soc`

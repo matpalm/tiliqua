@@ -55,21 +55,22 @@ class Ramp(wiring.Component):
     A retrigger mid-ramp does not restart the ramp until the output has reached 1.
     """
 
+    TIMEBASE_SQ = fixed.SQ(8, 24)
+
     i: In(stream.Signature(data.StructLayout({
             "trigger":  unsigned(1),
-            "td":       ASQ, # time delta
+            "td":       TIMEBASE_SQ, # time delta
         })))
     o: Out(stream.Signature(ASQ))
 
-    def __init__(self, extra_bits=16, shift=6):
-        self.extra_bits = extra_bits
+    def __init__(self, shift=6):
         self.shift = shift
         super().__init__()
 
     def elaborate(self, platform):
         m = Module()
 
-        s = Signal(fixed.SQ(self.extra_bits+1, ASQ.f_bits))
+        s = Signal(self.TIMEBASE_SQ)
 
         m.d.comb += [
             self.o.valid.eq(self.i.valid),
@@ -78,7 +79,7 @@ class Ramp(wiring.Component):
         ]
 
         with m.If(self.i.valid & self.o.ready):
-            with m.If(self.o.payload > fixed.Const(0.95, shape=ASQ)):
+            with m.If(self.o.payload > fixed.Const(0.985, shape=ASQ)):
                 with m.If(self.i.payload.trigger):
                     m.d.sync += s.eq(ASQ.min() << self.shift)
             with m.Else():

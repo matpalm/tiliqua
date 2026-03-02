@@ -435,6 +435,8 @@ class PolySoc(TiliquaSoc):
         self.add_rust_constant(
             f"pub const N_VOICES: usize = {PolySynth.N_VOICES};\n")
 
+        self.n_upsample = 32
+
         # now we can freeze the memory map
         self.finalize_csr_bridge()
 
@@ -491,12 +493,11 @@ class PolySoc(TiliquaSoc):
         wiring.connect(m, polysynth.o, pmod0.i_cal)
 
         # Upsample channels 0/1 before vectorscope
-        n_upsample = 32
         fs = self.clock_settings.audio_clock.fs()
         m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2)
         m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
         for ch in range(2):
-            r = dsp.Resample(fs_in=fs, n_up=n_upsample, m_down=1)
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1)
             setattr(m.submodules, f"resample{ch}", r)
             wiring.connect(m, up_split2.o[ch], r.i)
             wiring.connect(m, r.o, up_merge4.i[ch])

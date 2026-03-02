@@ -204,10 +204,13 @@ class MacroOscSoc(TiliquaSoc):
             bus_signature=self.psram_periph.bus.signature.flip(), n_ports=5)
         self.psram_periph.add_master(self.plotter.bus)
 
+        self.n_upsample = 16
+
         self.vector_periph = scope.VectorPeripheral()
         self.csr_decoder.add(self.vector_periph.bus, addr=self.vector_periph_base, name="vector_periph")
 
-        self.scope_periph = scope.ScopePeripheral()
+        self.scope_periph = scope.ScopePeripheral(
+            fs=self.clock_settings.audio_clock.fs() * self.n_upsample)
         self.csr_decoder.add(self.scope_periph.bus, addr=self.scope_periph_base, name="scope_periph")
 
         self.audio_fifo = AudioFIFOPeripheral()
@@ -265,12 +268,11 @@ class MacroOscSoc(TiliquaSoc):
         ]
 
         # Upsample before scope/vector
-        n_upsample = 16
         fs = self.clock_settings.audio_clock.fs()
         m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2, source=plot_fifo.r_stream)
         m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
         for ch in range(2):
-            r = dsp.Resample(fs_in=fs, n_up=n_upsample, m_down=1)
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1)
             setattr(m.submodules, f"resample{ch}", r)
             wiring.connect(m, up_split2.o[ch], r.i)
             wiring.connect(m, r.o, up_merge4.i[ch])

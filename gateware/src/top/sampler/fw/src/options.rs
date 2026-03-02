@@ -77,8 +77,8 @@ impl From<PlaybackMode> for tiliqua_hal::grain_player::PlaybackMode {
 }
 
 int_params!(ScrollParams<u8> { step: 1, min: 0, max: 60 });
-int_params!(SpeedParams<u16> { step: 1, min: 32, max: 1024, format: IntFormat::Scaled { divisor: 256, precision: 2 } });
-int_params!(LenParams<u32>     { step: 256, min: 0, max: 0x40000, format: IntFormat::Scaled { divisor: 48000, precision: 2 } });
+int_params!(SpeedParams<u16> { step: 1, min: 32, max: 1024, format: IntFormat::Scaled { divisor: 256, precision: 2, suffix: "x" } });
+int_params!(LenParams<u32>     { step: 256, min: 0, max: 0x40000, format: IntFormat::Scaled { divisor: 48000, precision: 2, suffix: "" } });
 int_params!(ZoomParams<u8>     { step: 1, min: 0, max: 4 });
 
 button_params!(ToggleButtonParams { mode: ButtonMode::Toggle });

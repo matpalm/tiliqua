@@ -37,6 +37,9 @@ class VectorPeripheral(wiring.Component):
     class Position(csr.Register, access="w"):
         value: csr.Field(csr.action.W, unsigned(16))
 
+    class PixelsPerVolt(csr.Register, access="r"):
+        pixels_per_volt: csr.Field(csr.action.R, unsigned(16))
+
     def __init__(self):
 
         self.stroke = Stroke()
@@ -52,6 +55,7 @@ class VectorPeripheral(wiring.Component):
         self._yscale    = regs.add("yscale",    self.ScaleReg(),     offset=0x18)
         self._pscale    = regs.add("pscale",    self.ScaleReg(),     offset=0x1C)
         self._cscale    = regs.add("cscale",    self.ScaleReg(),     offset=0x20)
+        self._pixels_per_volt = regs.add("pixels_per_volt", self.PixelsPerVolt(), offset=0x24)
 
         self._bridge = csr.Bridge(regs.as_memory_map())
 
@@ -72,6 +76,9 @@ class VectorPeripheral(wiring.Component):
 
         wiring.connect(m, wiring.flipped(self.i), self.stroke.i)
         wiring.connect(m, wiring.flipped(self.bus), self._bridge.bus)
+
+        m.d.comb += self._pixels_per_volt.f.pixels_per_volt.r_data.eq(
+            dsp.asq_from_volts(1) >> dsp.ASQ_EXTRA_FBITS)
 
         with m.If(self._hue.f.hue.w_stb):
             m.d.sync += self.stroke.hue.eq(self._hue.f.hue.w_data)
@@ -118,7 +125,7 @@ class ScopePeripheral(wiring.Component):
         intensity: csr.Field(csr.action.W, unsigned(8))
 
     class Timebase(csr.Register, access="w"):
-        timebase: csr.Field(csr.action.W, unsigned(16))
+        timebase: csr.Field(csr.action.W, unsigned(32))
 
     class XScale(csr.Register, access="w"):
         xscale: csr.Field(csr.action.W, unsigned(8))
@@ -135,8 +142,15 @@ class ScopePeripheral(wiring.Component):
     class YPosition(csr.Register, access="w"):
         ypos: csr.Field(csr.action.W, unsigned(16))
 
-    def __init__(self, n_channels=4):
+    class PixelsPerVolt(csr.Register, access="r"):
+        pixels_per_volt: csr.Field(csr.action.R, unsigned(16))
 
+    class Fs(csr.Register, access="r"):
+        fs: csr.Field(csr.action.R, unsigned(32))
+
+    def __init__(self, n_channels=4, fs=48000):
+
+        self.fs = fs
         self.n_channels = n_channels
         self.strokes = [Stroke()
                         for _ in range(self.n_channels)]
@@ -152,6 +166,8 @@ class ScopePeripheral(wiring.Component):
         self._xpos           = regs.add("xpos",           self.XPosition(),     offset=0x1C)
         self._ypos           = [regs.add(f"ypos{i}",      self.YPosition(),
                                 offset=(0x20+i*4)) for i in range(self.n_channels)]
+        self._pixels_per_volt = regs.add("pixels_per_volt", self.PixelsPerVolt(), offset=0x30)
+        self._fs              = regs.add("fs",              self.Fs(),             offset=0x34)
 
         self._bridge = csr.Bridge(regs.as_memory_map())
         super().__init__({
@@ -167,7 +183,6 @@ class ScopePeripheral(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        timebase = Signal(shape=dsp.ASQ)
         trigger_lvl = Signal(shape=dsp.ASQ)
         trigger_always = Signal()
 
@@ -177,6 +192,10 @@ class ScopePeripheral(wiring.Component):
 
         m.submodules.bridge = self._bridge
         wiring.connect(m, wiring.flipped(self.bus), self._bridge.bus)
+
+        m.d.comb += self._pixels_per_volt.f.pixels_per_volt.r_data.eq(
+            dsp.asq_from_volts(1) >> dsp.ASQ_EXTRA_FBITS)
+        m.d.comb += self._fs.f.fs.r_data.eq(self.fs)
 
         m.submodules += self.strokes
 
@@ -193,6 +212,7 @@ class ScopePeripheral(wiring.Component):
         # Send one copy to trigger => ramp => X
         m.submodules.trig = trig = dsp.Trigger()
         m.submodules.ramp = ramp = dsp.Ramp()
+        timebase = Signal(shape=dsp.Ramp.TIMEBASE_SQ)
         # Audio => Trigger
         dsp.connect_remap(m, irep2.o[0], trig.i, lambda o, i: [
             i.payload.sample.eq(o.payload),
@@ -227,8 +247,6 @@ class ScopePeripheral(wiring.Component):
 
         # Wishbone tweakables
 
-        asq_extra_bits = ASQ.f_bits - 15
-
         with m.If(self._flags.f.trigger_always.w_stb):
             m.d.sync += trigger_always.eq(self._flags.f.trigger_always.w_data)
 
@@ -241,7 +259,7 @@ class ScopePeripheral(wiring.Component):
                 m.d.sync += s.intensity.eq(self._intensity.f.intensity.w_data)
 
         with m.If(self._timebase.f.timebase.w_stb):
-            m.d.sync += timebase.as_value().eq(self._timebase.f.timebase.w_data<<asq_extra_bits)
+            m.d.sync += timebase.as_value().eq(self._timebase.f.timebase.w_data)
 
         with m.If(self._xscale.f.xscale.w_stb):
             for s in self.strokes:
@@ -252,7 +270,7 @@ class ScopePeripheral(wiring.Component):
                 m.d.sync += s.scale_y.eq(self._yscale.f.yscale.w_data)
 
         with m.If(self._trigger_lvl.f.trigger_level.w_stb):
-            m.d.sync += trigger_lvl.as_value().eq(self._trigger_lvl.f.trigger_level.w_data<<asq_extra_bits)
+            m.d.sync += trigger_lvl.as_value().eq(self._trigger_lvl.f.trigger_level.w_data<<dsp.ASQ_EXTRA_FBITS)
 
         with m.If(self._xpos.f.xpos.w_stb):
             for s in self.strokes:

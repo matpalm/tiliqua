@@ -1,6 +1,7 @@
 use opts::*;
 use strum_macros::{EnumIter, IntoStaticStr};
 use serde_derive::{Serialize, Deserialize};
+pub use tiliqua_lib::scope::{Timebase, VScale};
 
 #[derive(Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Default, Serialize, Deserialize)]
 #[strum(serialize_all = "SCREAMING-KEBAB-CASE")]
@@ -82,10 +83,8 @@ int_params!(EnvelopeParams<u8>      { step: 1,   min: 0,      max: 15 });
 int_params!(BinaryParams<u8>        { step: 1,   min: 0,      max: 1 });
 int_params!(CutoffParams<u16>       { step: 100, min: 0,      max: 2000 });
 int_params!(VolumeParams<u8>        { step: 1,   min: 0,      max: 15 });
-int_params!(TimebaseParams<u16>     { step: 128, min: 32,     max: 3872 });
 int_params!(TriggerLevelParams<i16> { step: 512, min: -16384, max: 16384 });
 int_params!(PositionParams<i16>     { step: 25,  min: -500,   max: 500 });
-int_params!(ScaleParams<u8>         { step: 1,   min: 0,      max: 15 });
 int_params!(ScrollParams<u8>        { step: 1,   min: 0,      max: 60 });
 
 button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });
@@ -156,8 +155,8 @@ pub struct FilterOpts {
 
 #[derive(OptionPage, Clone)]
 pub struct ScopeOpts {
-    #[option(1056)]
-    pub timebase: IntOption<TimebaseParams>,
+    #[option(Timebase::Timebase10ms)]
+    pub timebase: EnumOption<Timebase>,
     #[option]
     pub trig_mode: EnumOption<TriggerMode>,
     #[option]
@@ -170,10 +169,8 @@ pub struct ScopeOpts {
     pub ypos2: IntOption<PositionParams>,
     #[option(50)]
     pub ypos3: IntOption<PositionParams>,
-    #[option(8)]
-    pub yscale: IntOption<ScaleParams>,
-    #[option(7)]
-    pub xscale: IntOption<ScaleParams>,
+    #[option(VScale::Scale4V)]
+    pub yscale: EnumOption<VScale>,
     #[option(175)]
     pub xpos: IntOption<PositionParams>,
 }

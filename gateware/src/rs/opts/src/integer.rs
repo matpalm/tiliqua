@@ -9,7 +9,7 @@ use crate::traits::*;
 pub enum IntFormat {
     #[default]
     Raw,
-    Scaled { divisor: u32, precision: usize },
+    Scaled { divisor: u32, precision: usize, suffix: &'static str },
 }
 
 #[derive(Clone)]
@@ -61,9 +61,9 @@ where
             IntFormat::Raw => {
                 write!(&mut s, "{}", self.value).ok();
             }
-            IntFormat::Scaled { divisor, precision } => {
+            IntFormat::Scaled { divisor, precision, suffix } => {
                 let scaled = self.value.as_() / divisor as f32;
-                write!(&mut s, "{:.*}", precision, scaled).ok();
+                write!(&mut s, "{:.*}{}", precision, scaled, suffix).ok();
             }
         }
         s

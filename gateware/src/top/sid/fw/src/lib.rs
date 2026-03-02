@@ -6,5 +6,9 @@ pub use tiliqua_hal as hal;
 
 hal::impl_tiliqua_soc_pac!();
 
+hal::impl_scope! {
+    Scope0: pac::SCOPE_PERIPH,
+}
+
 pub mod handlers;
 pub mod options;

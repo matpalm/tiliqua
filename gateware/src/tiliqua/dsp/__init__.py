@@ -14,6 +14,13 @@ from amaranth_future import fixed
 # Signed fixed point, where -1 to +1 represents -8.192V to +8.192V.
 ASQ = fixed.SQ(1, int(os.environ.get('TILIQUA_ASQ_WIDTH', '16')) - 1)
 
+# Fractiona bits beyond 15-bit default used for pixel coordinate mapping.
+# Basically the whole scope subsystem was brought up with good scaling
+# assuming 16-bit samples for fixed-point to pixel-deflection mapping.
+# This constant is used in some places to ensure deflection looks similar
+# even if we introduce more fractional bits.
+ASQ_EXTRA_FBITS = ASQ.f_bits - 15
+
 def asq_from_volts(volts):
     """Convert a voltage to a ``fixed.Const`` of shape ``ASQ`` (4 counts/mV)."""
     return fixed.Const(volts / 8.192, shape=ASQ)

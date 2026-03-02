@@ -2,6 +2,7 @@ use opts::*;
 use strum_macros::{EnumIter, IntoStaticStr};
 use serde_derive::{Serialize, Deserialize};
 use tiliqua_lib::palette::ColorPalette;
+pub use tiliqua_lib::scope::{Timebase, VScale};
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
 #[strum(serialize_all = "SCREAMING-KEBAB-CASE")]
@@ -29,28 +30,6 @@ pub enum PlotType {
     Vector,
     #[default]
     Scope,
-}
-
-#[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
-#[strum(serialize_all = "kebab-case")]
-pub enum Timebase {
-    #[strum(serialize = "1s")]
-    Timebase1s,
-    #[strum(serialize = "500ms")]
-    Timebase500ms,
-    #[strum(serialize = "250ms")]
-    Timebase250ms,
-    #[strum(serialize = "100ms")]
-    Timebase100ms,
-    #[strum(serialize = "50ms")]
-    Timebase50ms,
-    #[strum(serialize = "25ms")]
-    Timebase25ms,
-    #[strum(serialize = "10ms")]
-    Timebase10ms,
-    #[default]
-    #[strum(serialize = "5ms")]
-    Timebase5ms,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
@@ -84,14 +63,11 @@ int_params!(NoteParams<u8>        { step: 1, min: 0, max: 128 });
 int_params!(HarmonicsParams<u8>   { step: 8, min: 0, max: 240 });
 int_params!(TimbreParams<u8>      { step: 8, min: 0, max: 240 });
 int_params!(MorphParams<u8>       { step: 8, min: 0, max: 240 });
-int_params!(XScaleParams<u8>      { step: 1, min: 0, max: 15 });
-int_params!(YScaleParams<u8>      { step: 1, min: 0, max: 15 });
 int_params!(PersistParams<u16>    { step: 128, min: 128, max: 8192 });
 int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
-int_params!(TimebaseParams<u16>   { step: 128, min: 32, max: 3872 });
-int_params!(TriggerLvlParams<i16> { step: 512, min: -16384, max: 16384 });
+int_params!(TriggerLvlParams<i16> { step: 500, min: -16000, max: 16000, format: IntFormat::Scaled { divisor: 4000, precision: 2, suffix: "V" } });
 int_params!(YPosParams<i16>       { step: 25, min: -500, max: 500 });
 int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 60 });
 
@@ -129,10 +105,10 @@ pub struct OscOpts {
 
 #[derive(OptionPage, Clone)]
 pub struct VectorOpts {
-    #[option(6)]
-    pub xscale: IntOption<XScaleParams>,
-    #[option(6)]
-    pub yscale: IntOption<YScaleParams>,
+    #[option]
+    pub xscale: EnumOption<VScale>,
+    #[option]
+    pub yscale: EnumOption<VScale>,
 }
 
 #[derive(OptionPage, Clone)]
@@ -151,7 +127,7 @@ pub struct BeamOpts {
 
 #[derive(OptionPage, Clone)]
 pub struct ScopeOpts {
-    #[option]
+    #[option(Timebase::Timebase5ms)]
     pub timebase: EnumOption<Timebase>,
     #[option]
     pub trig_mode: EnumOption<TriggerMode>,
@@ -165,10 +141,8 @@ pub struct ScopeOpts {
     pub ypos2: IntOption<YPosParams>,
     #[option(500)]
     pub ypos3: IntOption<YPosParams>,
-    #[option(7)]
-    pub yscale: IntOption<YScaleParams>,
-    #[option(6)]
-    pub xscale: IntOption<XScaleParams>,
+    #[option(VScale::Scale2V)]
+    pub yscale: EnumOption<VScale>,
 }
 
 #[derive(Options, Clone)]

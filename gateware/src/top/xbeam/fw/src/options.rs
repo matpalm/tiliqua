@@ -1,6 +1,7 @@
 use opts::*;
 use strum_macros::{EnumIter, IntoStaticStr};
 use tiliqua_lib::palette::ColorPalette;
+pub use tiliqua_lib::scope::{Timebase, VScale};
 use tiliqua_hal::dma_framebuffer::Rotate;
 use serde_derive::{Serialize, Deserialize};
 
@@ -49,41 +50,14 @@ pub enum PlotType {
     Scope,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
-#[strum(serialize_all = "kebab-case")]
-pub enum Timebase {
-    #[strum(serialize = "1s")]
-    Timebase1s,
-    #[strum(serialize = "500ms")]
-    Timebase500ms,
-    #[strum(serialize = "250ms")]
-    Timebase250ms,
-    #[default]
-    #[strum(serialize = "100ms")]
-    Timebase100ms,
-    #[strum(serialize = "50ms")]
-    Timebase50ms,
-    #[strum(serialize = "25ms")]
-    Timebase25ms,
-    #[strum(serialize = "10ms")]
-    Timebase10ms,
-    #[strum(serialize = "5ms")]
-    Timebase5ms,
-    #[strum(serialize = "2.5ms")]
-    Timebase2p5ms,
-    #[strum(serialize = "1ms")]
-    Timebase1ms,
-}
-
 int_params!(DelayParams<u16>      { step: 8, min: 0, max: 512 });
-int_params!(ScaleParams<u8>       { step: 1, min: 0, max: 15 });
 int_params!(PCScaleParams<u8>     { step: 1, min: 0, max: 15 });
 int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
 int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
-int_params!(TriggerLvlParams<i16> { step: 512, min: -16384, max: 16384 });
-int_params!(PosParams<i16>       { step: 25, min: -500, max: 500 });
+int_params!(TriggerLvlParams<i16> { step: 500, min: -16000, max: 16000, format: IntFormat::Scaled { divisor: 4000, precision: 2, suffix: "V" } });
+int_params!(PosParams<i16>       { step: 1, min: -20, max: 20, format: IntFormat::Scaled { divisor: 2, precision: 1, suffix: "div" } });
 int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 60 });
 
 button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });
@@ -98,12 +72,12 @@ pub struct HelpOpts {
 pub struct VectorOpts {
     #[option(0)]
     pub x_offset: IntOption<PosParams>,
-    #[option(9)]
-    pub x_scale: IntOption<ScaleParams>,
+    #[option(VScale::Scale1V)]
+    pub x_scale: EnumOption<VScale>,
     #[option(0)]
     pub y_offset: IntOption<PosParams>,
-    #[option(9)]
-    pub y_scale: IntOption<ScaleParams>,
+    #[option(VScale::Scale1V)]
+    pub y_scale: EnumOption<VScale>,
     #[option(4)]
     pub i_offset: IntOption<IntensityParams>,
     #[option(0)]
@@ -162,10 +136,8 @@ pub struct ScopeOpts1 {
     pub trig_mode: EnumOption<TriggerMode>,
     #[option]
     pub trig_lvl: IntOption<TriggerLvlParams>,
-    #[option(6)]
-    pub yscale: IntOption<ScaleParams>,
-    #[option(9)]
-    pub xscale: IntOption<ScaleParams>,
+    #[option(VScale::Scale4V)]
+    pub yscale: EnumOption<VScale>,
     #[option(8)]
     pub intensity: IntOption<IntensityParams>,
     #[option(10)]
@@ -174,13 +146,13 @@ pub struct ScopeOpts1 {
 
 #[derive(OptionPage, Clone)]
 pub struct ScopeOpts2 {
-    #[option(-250)]
+    #[option(-8)]
     pub ypos0: IntOption<PosParams>,
-    #[option(-75)]
+    #[option(-2)]
     pub ypos1: IntOption<PosParams>,
-    #[option(75)]
+    #[option(2)]
     pub ypos2: IntOption<PosParams>,
-    #[option(250)]
+    #[option(8)]
     pub ypos3: IntOption<PosParams>,
 }
 

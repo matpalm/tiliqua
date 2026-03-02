@@ -3,6 +3,7 @@ use strum_macros::{EnumIter, IntoStaticStr};
 use serde_derive::{Serialize, Deserialize};
 
 use tiliqua_lib::palette::ColorPalette;
+pub use tiliqua_lib::scope::VScale;
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
 #[strum(serialize_all = "SCREAMING-KEBAB-CASE")]
@@ -47,8 +48,6 @@ int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
 int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
-int_params!(XScaleParams<u8>      { step: 1, min: 0, max: 15 });
-int_params!(YScaleParams<u8>      { step: 1, min: 0, max: 15 });
 int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 60 });
 
 button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });
@@ -73,10 +72,10 @@ pub struct PolyOpts {
 
 #[derive(OptionPage, Clone)]
 pub struct VectorOpts {
-    #[option(6)]
-    pub xscale: IntOption<XScaleParams>,
-    #[option(6)]
-    pub yscale: IntOption<YScaleParams>,
+    #[option(VScale::Scale1V)]
+    pub xscale: EnumOption<VScale>,
+    #[option(VScale::Scale1V)]
+    pub yscale: EnumOption<VScale>,
 }
 
 #[derive(OptionPage, Clone)]

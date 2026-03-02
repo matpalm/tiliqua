@@ -202,9 +202,8 @@ class XbeamSoc(TiliquaSoc):
             bus_signature=self.psram_periph.bus.signature.flip(), n_ports=5)
         self.psram_periph.add_master(self.plotter.bus)
 
-        # Vectorscope with upsampling and CSR registers
-        self.vector_periph = scope.VectorPeripheral(
-            n_upsample=8)
+        # Vectorscope with CSR registers
+        self.vector_periph = scope.VectorPeripheral()
         self.csr_decoder.add(self.vector_periph.bus, addr=self.vector_periph_base, name="vector_periph")
 
         # 4-ch oscilloscope with CSR registers
@@ -268,10 +267,21 @@ class XbeamSoc(TiliquaSoc):
         with m.Else():
             dsp.connect_peek(m, pmod0.o_cal, plot_fifo.w_stream)
 
+        # Upsample all 4 channels before routing to scope/vector peripherals
+        n_upsample = 8
+        fs = self.clock_settings.audio_clock.fs()
+        m.submodules.up_split4 = up_split4 = dsp.Split(n_channels=4, source=plot_fifo.r_stream)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
+        for ch in range(4):
+            r = dsp.Resample(fs_in=fs, n_up=n_upsample, m_down=1)
+            setattr(m.submodules, f"resample{ch}", r)
+            wiring.connect(m, up_split4.o[ch], r.i)
+            wiring.connect(m, r.o, up_merge4.i[ch])
+
         with m.If(self.scope_periph.soc_en):
-            wiring.connect(m, plot_fifo.r_stream, self.scope_periph.i)
+            wiring.connect(m, up_merge4.o, self.scope_periph.i)
         with m.Else():
-            wiring.connect(m, plot_fifo.r_stream, self.vector_periph.i)
+            wiring.connect(m, up_merge4.o, self.vector_periph.i)
 
         return m
 

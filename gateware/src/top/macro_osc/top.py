@@ -204,9 +204,7 @@ class MacroOscSoc(TiliquaSoc):
             bus_signature=self.psram_periph.bus.signature.flip(), n_ports=5)
         self.psram_periph.add_master(self.plotter.bus)
 
-        self.vector_periph = scope.VectorPeripheral(
-            n_upsample=16,
-            fs=48000)
+        self.vector_periph = scope.VectorPeripheral()
         self.csr_decoder.add(self.vector_periph.bus, addr=self.vector_periph_base, name="vector_periph")
 
         self.scope_periph = scope.ScopePeripheral()
@@ -257,7 +255,7 @@ class MacroOscSoc(TiliquaSoc):
         # This FIFO does not block the audio stream.
 
         m.submodules.plot_fifo = plot_fifo = fifo.SyncFIFOBuffered(
-            width=data.ArrayLayout(ASQ, 4).as_shape().width, depth=32)
+            width=data.ArrayLayout(ASQ, 2).as_shape().width, depth=32)
 
         # Route audio outputs 2/3 to plotting stream (scope / vector)
         m.d.comb += [
@@ -266,11 +264,24 @@ class MacroOscSoc(TiliquaSoc):
             plot_fifo.w_stream.payload[16:32].eq(self.audio_fifo.stream.payload[3]),
         ]
 
+        # Upsample before scope/vector
+        n_upsample = 16
+        fs = self.clock_settings.audio_clock.fs()
+        m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2, source=plot_fifo.r_stream)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
+        for ch in range(2):
+            r = dsp.Resample(fs_in=fs, n_up=n_upsample, m_down=1)
+            setattr(m.submodules, f"resample{ch}", r)
+            wiring.connect(m, up_split2.o[ch], r.i)
+            wiring.connect(m, r.o, up_merge4.i[ch])
+        for ch in range(2, 4):
+            m.d.comb += up_merge4.i[ch].valid.eq(1)
+
         # Switch to use scope or vectorscope
         with m.If(self.scope_periph.soc_en):
-            wiring.connect(m, plot_fifo.r_stream, self.scope_periph.i)
+            wiring.connect(m, up_merge4.o, self.scope_periph.i)
         with m.Else():
-            wiring.connect(m, plot_fifo.r_stream, self.vector_periph.i)
+            wiring.connect(m, up_merge4.o, self.vector_periph.i)
 
         return m
 

@@ -18,24 +18,14 @@ class Stroke(wiring.Component):
     """
     Frontend for stroke-raster converter (plotting of analog waveforms in CRT-style)
 
-    Takes a synchronized stream of 4 channels (x, y, intensity, color), upsamples them
-    and generates ``PlotRequest`` commands for blended drawing to a framebuffer.
-
-    To obtain more points, the incoming stream is upsampled using an FIR-based
-    fractional resampler. This is kind of analogous to sin(x)/x interpolation.
-
-    To save resources, only the positions are upsampled, as the color and intensity
-    are generally too quantized for upsampling to make any visual difference.
+    Takes a synchronized stream of 4 channels (x, y, intensity, color) and
+    generates ``PlotRequest`` commands for blended drawing to a framebuffer.
 
     There are a few optional signals exposed which can be used by user gateware or
     an SoC to scale or shift the waveforms around.
     """
 
-    def __init__(self, *, fs=192000, n_upsample=None,
-                 default_hue=10, default_x=0, default_y=0):
-
-        self.fs = fs
-        self.n_upsample = n_upsample
+    def __init__(self, *, default_hue=10, default_x=0, default_y=0):
 
         self.hue       = Signal(4, init=default_hue);
         self.intensity = Signal(4, init=8);
@@ -58,32 +48,7 @@ class Stroke(wiring.Component):
     def elaborate(self, platform) -> Module:
         m = Module()
 
-        if self.n_upsample is not None and self.n_upsample != 1:
-            # If interpolation is enabled, insert an FIR upsampling stage.
-            m.submodules.split = split = dsp.Split(n_channels=4)
-            m.submodules.merge = merge = dsp.Merge(n_channels=4)
-
-            m.submodules.resample0 = resample0 = dsp.Resample(fs_in=self.fs, n_up=self.n_upsample, m_down=1)
-            m.submodules.resample1 = resample1 = dsp.Resample(fs_in=self.fs, n_up=self.n_upsample, m_down=1)
-            m.submodules.resample2 = resample2 = dsp.Duplicate(n=self.n_upsample)
-            m.submodules.resample3 = resample3 = dsp.Duplicate(n=self.n_upsample)
-
-            wiring.connect(m, wiring.flipped(self.i), split.i)
-
-            wiring.connect(m, split.o[0], resample0.i)
-            wiring.connect(m, split.o[1], resample1.i)
-            wiring.connect(m, split.o[2], resample2.i)
-            wiring.connect(m, split.o[3], resample3.i)
-
-            wiring.connect(m, resample0.o, merge.i[0])
-            wiring.connect(m, resample1.o, merge.i[1])
-            wiring.connect(m, resample2.o, merge.i[2])
-            wiring.connect(m, resample3.o, merge.i[3])
-
-            self.point_stream = merge.o
-        else:
-            # No upsampling.
-            self.point_stream = self.i
+        self.point_stream = self.i
 
         # last sample
         sample_x = Signal(signed(16))

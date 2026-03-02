@@ -37,9 +37,9 @@ class VectorPeripheral(wiring.Component):
     class Position(csr.Register, access="w"):
         value: csr.Field(csr.action.W, unsigned(16))
 
-    def __init__(self, **kwargs):
+    def __init__(self):
 
-        self.stroke = Stroke(**kwargs)
+        self.stroke = Stroke()
 
         regs = csr.Builder(addr_width=6, data_width=8)
 
@@ -135,10 +135,10 @@ class ScopePeripheral(wiring.Component):
     class YPosition(csr.Register, access="w"):
         ypos: csr.Field(csr.action.W, unsigned(16))
 
-    def __init__(self, n_channels=4, **kwargs):
+    def __init__(self, n_channels=4):
 
         self.n_channels = n_channels
-        self.strokes = [Stroke(**kwargs)
+        self.strokes = [Stroke()
                         for _ in range(self.n_channels)]
 
         regs = csr.Builder(addr_width=6, data_width=8)

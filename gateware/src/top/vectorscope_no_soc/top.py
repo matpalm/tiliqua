@@ -93,8 +93,8 @@ class VectorScopeTop(Elaboratable):
         # Create the plotting logic itself
         #
 
-        self.vector_periph = scope.VectorPeripheral(
-            n_upsample=32 if self.spectrogram else 8, fs=clock_settings.audio_clock.fs())
+        self.n_upsample = 32 if self.spectrogram else 8
+        self.vector_periph = scope.VectorPeripheral()
         if self.spectrogram:
             self.spectro = scope.Spectrogram(fs=clock_settings.audio_clock.fs())
 
@@ -128,12 +128,23 @@ class VectorScopeTop(Elaboratable):
         wiring.connect(m, wiring.flipped(self.fb.fbp), self.persist.fbp)
         wiring.connect(m, wiring.flipped(self.fb.fbp), self.fb_plot.fbp)
 
+        # Upsample all 4 channels before vectorscope
+        fs = self.clock_settings.audio_clock.fs()
+        m.submodules.up_split4 = up_split4 = dsp.Split(n_channels=4)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
+        for ch in range(4):
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1)
+            setattr(m.submodules, f"resample{ch}", r)
+            wiring.connect(m, up_split4.o[ch], r.i)
+            wiring.connect(m, r.o, up_merge4.i[ch])
+        wiring.connect(m, up_merge4.o, self.vector_periph.i)
+
         if self.spectrogram:
             m.submodules.spectro = self.spectro
             wiring.connect(m, self.pmod0.o_cal, self.spectro.i)
-            wiring.connect(m, self.spectro.o, self.vector_periph.i)
+            wiring.connect(m, self.spectro.o, up_split4.i)
         else:
-            wiring.connect(m, self.pmod0.o_cal, self.vector_periph.i)
+            wiring.connect(m, self.pmod0.o_cal, up_split4.i)
 
         # Connect vector peripheral to plotter
         wiring.connect(m, self.vector_periph.o, self.fb_plot.i[0])

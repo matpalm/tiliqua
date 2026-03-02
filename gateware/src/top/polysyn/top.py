@@ -425,9 +425,7 @@ class PolySoc(TiliquaSoc):
             bus_signature=self.psram_periph.bus.signature.flip(), n_ports=1)
         self.psram_periph.add_master(self.plotter.bus)
 
-        self.vector_periph = scope.VectorPeripheral(
-            fs=48000,
-            n_upsample=32)
+        self.vector_periph = scope.VectorPeripheral()
         self.csr_decoder.add(self.vector_periph.bus, addr=self.vector_periph_base, name="vector_periph")
 
         # synth controls
@@ -492,13 +490,27 @@ class PolySoc(TiliquaSoc):
         wiring.connect(m, pmod0.o_cal, polysynth.i)
         wiring.connect(m, polysynth.o, pmod0.i_cal)
 
+        # Upsample channels 0/1 before vectorscope
+        n_upsample = 32
+        fs = self.clock_settings.audio_clock.fs()
+        m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
+        for ch in range(2):
+            r = dsp.Resample(fs_in=fs, n_up=n_upsample, m_down=1)
+            setattr(m.submodules, f"resample{ch}", r)
+            wiring.connect(m, up_split2.o[ch], r.i)
+            wiring.connect(m, r.o, up_merge4.i[ch])
+        for ch in range(2, 4):
+            m.d.comb += up_merge4.i[ch].valid.eq(1)
+
         with m.If(self.vector_periph.soc_en):
-            # polysynth out -> vectorscope TODO use true split
+            # polysynth out -> upsample -> vectorscope
             m.d.comb += [
-                self.vector_periph.i.valid.eq(polysynth.o.valid),
-                self.vector_periph.i.payload[0].eq(polysynth.o.payload[2]),
-                self.vector_periph.i.payload[1].eq(polysynth.o.payload[3]),
+                up_split2.i.valid.eq(polysynth.o.valid),
+                up_split2.i.payload[0].eq(polysynth.o.payload[2]),
+                up_split2.i.payload[1].eq(polysynth.o.payload[3]),
             ]
+            wiring.connect(m, up_merge4.o, self.vector_periph.i)
 
         return m
 

@@ -83,7 +83,7 @@ from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ
-from tiliqua.raster import scope
+from tiliqua.raster import PSQ, scope
 from tiliqua.raster.plot import FramebufferPlotter
 from tiliqua.tiliqua_soc import TiliquaSoc
 
@@ -425,9 +425,7 @@ class PolySoc(TiliquaSoc):
             bus_signature=self.psram_periph.bus.signature.flip(), n_ports=1)
         self.psram_periph.add_master(self.plotter.bus)
 
-        self.vector_periph = scope.VectorPeripheral(
-            fs=48000,
-            n_upsample=32)
+        self.vector_periph = scope.VectorPeripheral()
         self.csr_decoder.add(self.vector_periph.bus, addr=self.vector_periph_base, name="vector_periph")
 
         # synth controls
@@ -436,6 +434,8 @@ class PolySoc(TiliquaSoc):
 
         self.add_rust_constant(
             f"pub const N_VOICES: usize = {PolySynth.N_VOICES};\n")
+
+        self.n_upsample = 32
 
         # now we can freeze the memory map
         self.finalize_csr_bridge()
@@ -492,13 +492,26 @@ class PolySoc(TiliquaSoc):
         wiring.connect(m, pmod0.o_cal, polysynth.i)
         wiring.connect(m, polysynth.o, pmod0.i_cal)
 
+        # Upsample channels 0/1 before vectorscope
+        fs = self.clock_settings.audio_clock.fs()
+        m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2, shape=PSQ)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4, shape=PSQ)
+        for ch in range(2):
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1, shape=PSQ)
+            setattr(m.submodules, f"resample{ch}", r)
+            wiring.connect(m, up_split2.o[ch], r.i)
+            wiring.connect(m, r.o, up_merge4.i[ch])
+        for ch in range(2, 4):
+            m.d.comb += up_merge4.i[ch].valid.eq(1)
+
         with m.If(self.vector_periph.soc_en):
-            # polysynth out -> vectorscope TODO use true split
+            # polysynth out -> upsample -> vectorscope
             m.d.comb += [
-                self.vector_periph.i.valid.eq(polysynth.o.valid),
-                self.vector_periph.i.payload[0].eq(polysynth.o.payload[2]),
-                self.vector_periph.i.payload[1].eq(polysynth.o.payload[3]),
+                up_split2.i.valid.eq(polysynth.o.valid),
+                up_split2.i.payload[0].eq(polysynth.o.payload[2]),
+                up_split2.i.payload[1].eq(polysynth.o.payload[3]),
             ]
+            wiring.connect(m, up_merge4.o, self.vector_periph.i)
 
         return m
 

@@ -10,6 +10,7 @@ from amaranth.lib.wiring import In, Out
 
 from ..build import sim
 from . import tmds
+from .types import DVIPixel
 
 
 class DVITimingGen(wiring.Component):
@@ -121,16 +122,10 @@ class DVIPHY(wiring.Component):
     """
     DVI PHY (serializer), DDR outputs currently ECP5-specific.
     Assumes clock domains 'dvi' (pixel clock) and 'dvi5x' (5x pixel clock).
+    Takes a DVIPixel as input (1 per dvi clock).
     """
 
-    # Channel data and control inputs
-    de: In(1)           # Data enable (high when drawing)
-    data_in_ch0: In(8)  # Channel 0 - data
-    data_in_ch1: In(8)  # Channel 1 - data
-    data_in_ch2: In(8)  # Channel 2 - data
-    ctrl_in_ch0: In(2)  # Channel 0 - control
-    ctrl_in_ch1: In(2)  # Channel 1 - control
-    ctrl_in_ch2: In(2)  # Channel 2 - control
+    i: In(DVIPixel)
 
     def elaborate(self, platform):
         m = Module()
@@ -146,20 +141,20 @@ class DVIPHY(wiring.Component):
 
         # Connect TMDS encoder inputs
         m.d.dvi += [
-            # Channel 0
-            encode_ch0.data_in.eq(self.data_in_ch0),
-            encode_ch0.ctrl_in.eq(self.ctrl_in_ch0),
-            encode_ch0.de.eq(self.de),
+            # Channel 0 (blue + hsync/vsync)
+            encode_ch0.data_in.eq(self.i.b),
+            encode_ch0.ctrl_in.eq(Cat(self.i.hsync, self.i.vsync)),
+            encode_ch0.de.eq(self.i.de),
             tmds_ch0.eq(encode_ch0.tmds),
-            # Channel 1
-            encode_ch1.data_in.eq(self.data_in_ch1),
-            encode_ch1.ctrl_in.eq(self.ctrl_in_ch1),
-            encode_ch1.de.eq(self.de),
+            # Channel 1 (green)
+            encode_ch1.data_in.eq(self.i.g),
+            encode_ch1.ctrl_in.eq(0),
+            encode_ch1.de.eq(self.i.de),
             tmds_ch1.eq(encode_ch1.tmds),
-            # Channel 2
-            encode_ch2.data_in.eq(self.data_in_ch2),
-            encode_ch2.ctrl_in.eq(self.ctrl_in_ch2),
-            encode_ch2.de.eq(self.de),
+            # Channel 2 (red)
+            encode_ch2.data_in.eq(self.i.r),
+            encode_ch2.ctrl_in.eq(0),
+            encode_ch2.de.eq(self.i.de),
             tmds_ch2.eq(encode_ch2.tmds)
         ]
 

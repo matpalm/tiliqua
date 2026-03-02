@@ -35,15 +35,13 @@ class Resample(wiring.Component):
         at a rate determined by :py:`fs_in * (n_up / m_down)`.
     """
 
-    i: In(stream.Signature(ASQ))
-    o: Out(stream.Signature(ASQ))
-
     def __init__(self,
                  fs_in:      int,
                  n_up:       int,
                  m_down:     int,
                  bw:         float=0.4,
-                 order_mult: int=5):
+                 order_mult: int=5,
+                 shape=ASQ):
         """
         fs_in : int
             Expected sample rate of incoming samples, used for calculating filter coefficients.
@@ -59,6 +57,8 @@ class Resample(wiring.Component):
             Filter order multiplier, determines number of taps in underlying FIR filter. The
             underlying tap count is determined as :py:`order_factor*max(self.n_up, self.m_down)`,
             rounded up to the next multiple of :py:`n_up` (required for even zero padding).
+        shape : fixed.Shape
+            Fixed-point shape for input/output samples. Defaults to ASQ.
         """
 
         gcd = math.gcd(n_up, m_down)
@@ -86,9 +86,13 @@ class Resample(wiring.Component):
             filter_order=filter_order,
             prescale=self.n_up,
             stride_i=self.n_up,
-            stride_o=self.m_down)
+            stride_o=self.m_down,
+            shape=shape)
 
-        super().__init__()
+        super().__init__({
+            "i": In(stream.Signature(shape)),
+            "o": Out(stream.Signature(shape)),
+        })
 
     def elaborate(self, platform):
 
@@ -96,7 +100,6 @@ class Resample(wiring.Component):
 
         m.submodules.filt = filt = self.filt
 
-        upsampled_signal  = Signal(ASQ)
         upsample_counter  = Signal(range(self.n_up))
 
         m.d.comb += [

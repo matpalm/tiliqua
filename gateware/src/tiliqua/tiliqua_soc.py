@@ -64,7 +64,7 @@ class TiliquaSoc(Component):
     def __init__(self, *, firmware_bin_path, ui_name, ui_tag, platform_class, clock_settings,
                  touch=False, finalize_csr_bridge=True, poke_outputs=False, mainram_size=0x4000,
                  fw_location=None, fw_offset=None, cpu_variant="tiliqua_rv32im",
-                 extra_cpu_regions=[]):
+                 extra_cpu_regions=[], fb_overlay=None):
 
         super().__init__({})
 
@@ -223,7 +223,8 @@ class TiliquaSoc(Component):
         # video PHY (DMAs from PSRAM starting at self.psram_base)
         self.fb = framebuffer.DMAFramebuffer(
                 palette=self.palette_periph.palette,
-                fixed_modeline=self.clock_settings.modeline)
+                fixed_modeline=self.clock_settings.modeline,
+                overlay=fb_overlay)
         self.psram_periph.add_master(self.fb.bus)
 
         # Timing CSRs for video PHY
@@ -474,6 +475,7 @@ class TiliquaSoc(Component):
             f.write(f"pub const TOUCH_SENSOR_ORDER: [u8; 8] = {pmod_rev.touch_order()};\n")
             f.write(f"pub const PMOD_DEFAULT_CAL: [f32; 4] = {pmod_rev.default_calibration_rs()};\n")
             f.write(f"pub const BLIT_MEM_BASE: usize = 0x{self.blit_mem_base:x};\n")
+            f.write(f"pub const AUDIO_FS: u32            = {self.clock_settings.audio_clock.fs()};\n")
 
             f.write("// Extra constants specified by an SoC subclass:\n")
             if hasattr(self, '__doc__'):

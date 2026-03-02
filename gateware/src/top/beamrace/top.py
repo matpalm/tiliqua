@@ -412,13 +412,12 @@ class BeamRaceTop(Elaboratable):
         if sim.is_hw(platform):
             m.submodules.dvi_gen = dvi_gen = dvi.DVIPHY()
             m.d.dvi += [
-                dvi_gen.de.eq(dvi_tgen.ctrl_phy.de),
-                dvi_gen.data_in_ch0.eq(core.o.b),
-                dvi_gen.data_in_ch1.eq(core.o.g),
-                dvi_gen.data_in_ch2.eq(core.o.r),
-                dvi_gen.ctrl_in_ch0.eq(Cat(dvi_tgen.ctrl_phy.hsync, dvi_tgen.ctrl_phy.vsync)),
-                dvi_gen.ctrl_in_ch1.eq(0),
-                dvi_gen.ctrl_in_ch2.eq(0),
+                dvi_gen.i.de.eq(dvi_tgen.ctrl_phy.de),
+                dvi_gen.i.b.eq(core.o.b),
+                dvi_gen.i.g.eq(core.o.g),
+                dvi_gen.i.r.eq(core.o.r),
+                dvi_gen.i.hsync.eq(dvi_tgen.ctrl_phy.hsync),
+                dvi_gen.i.vsync.eq(dvi_tgen.ctrl_phy.vsync),
             ]
 
         return m

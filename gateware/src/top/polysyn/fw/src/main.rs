@@ -227,7 +227,7 @@ fn main() -> ! {
         timer.enable_tick_isr(TIMER0_ISR_PERIOD_MS,
                               pac::Interrupt::TIMER0);
 
-        let vscope  = peripherals.VECTOR_PERIPH;
+        let mut vscope = Vector0::new(peripherals.VECTOR_PERIPH);
         let mut first = true;
 
         let h_active = display.size().width;
@@ -323,19 +323,17 @@ fn main() -> ! {
                     opts.beam.hue.value).ok();
                 persist.set_persist(128);
                 persist.set_decay(1);
-                vscope.flags().write(
-                    |w| w.enable().bit(false) );
+                vscope.set_enabled(false);
             } else {
                 persist.set_persist(opts.beam.persist.value);
                 persist.set_decay(opts.beam.decay.value);
-                vscope.flags().write(
-                    |w| w.enable().bit(true) );
+                vscope.set_enabled(true);
             }
 
-            vscope.hue().write(|w| unsafe { w.hue().bits(opts.beam.hue.value) } );
-            vscope.intensity().write(|w| unsafe { w.intensity().bits(opts.beam.intensity.value) } );
-            vscope.xscale().write(|w| unsafe { w.scale().bits(opts.vector.xscale.value) } );
-            vscope.yscale().write(|w| unsafe { w.scale().bits(opts.vector.yscale.value) } );
+            vscope.set_hue(opts.beam.hue.value);
+            vscope.set_intensity(opts.beam.intensity.value);
+            vscope.set_xscale(opts.vector.xscale.value);
+            vscope.set_yscale(opts.vector.yscale.value);
 
             if !on_help_page {
                 for ix in 0usize..N_VOICES {

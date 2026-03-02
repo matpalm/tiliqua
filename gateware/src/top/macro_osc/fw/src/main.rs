@@ -209,8 +209,8 @@ fn main() -> ! {
     let mut pmod = EurorackPmod0::new(peripherals.PMOD0_PERIPH);
     calibration::CalibrationConstants::load_or_default(&mut i2cdev1, &mut pmod);
 
-    let vscope  = peripherals.VECTOR_PERIPH;
-    let scope  = peripherals.SCOPE_PERIPH;
+    let mut vscope = Vector0::new(peripherals.VECTOR_PERIPH);
+    let mut scope = Scope0::new(peripherals.SCOPE_PERIPH, 6);
 
     //
     // Create application object.
@@ -367,56 +367,32 @@ fn main() -> ! {
                 persist.set_decay(opts.beam.decay.value);
             }
 
-            let timebase_value = match opts.scope.timebase.value {
-                Timebase::Timebase1s    => 12,
-                Timebase::Timebase500ms => 24,
-                Timebase::Timebase250ms => 52,
-                Timebase::Timebase100ms => 128,
-                Timebase::Timebase50ms  => 256,
-                Timebase::Timebase25ms  => 512,
-                Timebase::Timebase10ms  => 1280,
-                Timebase::Timebase5ms   => 2560,
-            };
+            vscope.set_hue(opts.beam.hue.value);
+            vscope.set_intensity(opts.beam.intensity.value);
+            vscope.set_xscale(opts.vector.xscale.value);
+            vscope.set_yscale(opts.vector.yscale.value);
 
-            unsafe {
-                vscope.hue().write(|w| w.hue().bits(opts.beam.hue.value));
-                vscope.intensity().write(|w| w.intensity().bits(opts.beam.intensity.value));
-                vscope.xscale().write(|w| w.scale().bits(opts.vector.xscale.value));
-                vscope.yscale().write(|w| w.scale().bits(opts.vector.yscale.value));
-
-                scope.hue().write(|w| w.hue().bits(opts.beam.hue.value+6));
-                scope.intensity().write(|w| w.intensity().bits(opts.beam.intensity.value));
-
-                scope.trigger_lvl().write(|w| w.trigger_level().bits(opts.scope.trig_lvl.value as u16));
-                scope.xscale().write(|w| w.xscale().bits(opts.scope.xscale.value));
-                scope.yscale().write(|w| w.yscale().bits(opts.scope.yscale.value));
-                scope.timebase().write(|w| w.timebase().bits(timebase_value) );
-
-                scope.ypos0().write(|w| w.ypos().bits(opts.scope.ypos0.value as u16));
-                scope.ypos1().write(|w| w.ypos().bits(opts.scope.ypos1.value as u16));
-                scope.ypos2().write(|w| w.ypos().bits(opts.scope.ypos2.value as u16));
-                scope.ypos3().write(|w| w.ypos().bits(opts.scope.ypos3.value as u16));
-            }
+            scope.set_hue(opts.beam.hue.value + 6);
+            scope.set_intensity(opts.beam.intensity.value);
+            scope.set_trigger_level(opts.scope.trig_lvl.value);
+            scope.set_yscale(opts.scope.yscale.value);
+            scope.set_timebase(opts.scope.timebase.value);
+            scope.set_ypos_px(0, opts.scope.ypos_out.value);
+            scope.set_ypos_px(1, opts.scope.ypos_aux.value);
+            scope.set_ypos_px(2, 500);
+            scope.set_ypos_px(3, 500);
 
 
             if opts.tracker.page.value == Page::Help {
-                scope.flags().write(
-                    |w| w.enable().bit(false) );
-                vscope.flags().write(
-                    |w| w.enable().bit(false) );
+                scope.set_enabled(false, false);
+                vscope.set_enabled(false);
             } else {
                 if opts.misc.plot_type.value == PlotType::Vector {
-                    scope.flags().write(
-                        |w| w.enable().bit(false) );
-                    vscope.flags().write(
-                        |w| w.enable().bit(true) );
+                    scope.set_enabled(false, false);
+                    vscope.set_enabled(true);
                 } else {
-                    scope.flags().write(
-                        |w| { w.enable().bit(true);
-                              w.trigger_always().bit(opts.scope.trig_mode.value == TriggerMode::Always)
-                        } );
-                    vscope.flags().write(
-                        |w| w.enable().bit(false) );
+                    scope.set_enabled(true, opts.scope.trig_mode.value == TriggerMode::Always);
+                    vscope.set_enabled(false);
                 }
             }
 

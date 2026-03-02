@@ -12,7 +12,10 @@ from amaranth_future import fixed
 
 # Native 'Audio sample SQ': shape of audio samples from CODEC.
 # Signed fixed point, where -1 to +1 represents -8.192V to +8.192V.
-ASQ = fixed.SQ(1, int(os.environ.get('TILIQUA_ASQ_WIDTH', '16')) - 1)
+_ASQ_WIDTH = int(os.environ.get('TILIQUA_ASQ_WIDTH', '16'))
+_ASQ_I_BITS = int(os.environ.get('TILIQUA_ASQ_I_BITS', '1'))
+ASQ = fixed.SQ(_ASQ_I_BITS, _ASQ_WIDTH - _ASQ_I_BITS)
+
 
 def asq_from_volts(volts):
     """Convert a voltage to a ``fixed.Const`` of shape ``ASQ`` (4 counts/mV)."""

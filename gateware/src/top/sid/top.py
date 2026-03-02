@@ -269,7 +269,8 @@ class SIDSoc(TiliquaSoc):
         self.psram_periph.add_master(self.plotter.bus)
 
         # Add scope peripheral
-        self.scope_periph = scope.ScopePeripheral()
+        self.scope_periph = scope.ScopePeripheral(
+            fs=self.clock_settings.audio_clock.fs())
         self.csr_decoder.add(self.scope_periph.bus, addr=0x1100, name="scope_periph")
 
         # Note: Arbiter is now built into the FramebufferPlotter

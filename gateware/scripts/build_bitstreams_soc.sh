@@ -7,8 +7,8 @@
 parallel --halt now,fail=1 --jobs 0 --ungroup "{} $@" ::: \
   "R35_OUTPUT_ALWAYS_MUTE=1 pdm bootloader build --fw-location=spiflash" \
   "pdm polysyn build" \
-  "pdm selftest build" \
-  "pdm xbeam build --fs-192khz" \
+  "TILIQUA_ASQ_I_BITS=2 TILIQUA_ASQ_WIDTH=17 pdm selftest build" \
+  "TILIQUA_ASQ_I_BITS=2 TILIQUA_ASQ_WIDTH=18 pdm xbeam build --fs-192khz" \
   "pdm macro_osc build" \
   "pdm sid build" \
   "pdm sampler build"

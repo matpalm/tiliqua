@@ -1,7 +1,9 @@
 use opts::*;
 use strum_macros::{EnumIter, IntoStaticStr};
 use tiliqua_lib::palette::ColorPalette;
+pub use tiliqua_lib::scope::{Timebase, VScale};
 use tiliqua_hal::dma_framebuffer::Rotate;
+use tiliqua_pac::constants::AUDIO_FS;
 use serde_derive::{Serialize, Deserialize};
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
@@ -51,40 +53,31 @@ pub enum PlotType {
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
 #[strum(serialize_all = "kebab-case")]
-pub enum Timebase {
-    #[strum(serialize = "1s")]
-    Timebase1s,
-    #[strum(serialize = "500ms")]
-    Timebase500ms,
-    #[strum(serialize = "250ms")]
-    Timebase250ms,
+pub enum HelpPage {
+    Off,
     #[default]
-    #[strum(serialize = "100ms")]
-    Timebase100ms,
-    #[strum(serialize = "50ms")]
-    Timebase50ms,
-    #[strum(serialize = "25ms")]
-    Timebase25ms,
-    #[strum(serialize = "10ms")]
-    Timebase10ms,
-    #[strum(serialize = "5ms")]
-    Timebase5ms,
-    #[strum(serialize = "2.5ms")]
-    Timebase2p5ms,
-    #[strum(serialize = "1ms")]
-    Timebase1ms,
+    On,
 }
 
-int_params!(DelayParams<u16>      { step: 8, min: 0, max: 512 });
-int_params!(ScaleParams<u8>       { step: 1, min: 0, max: 15 });
+#[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
+#[strum(serialize_all = "kebab-case")]
+pub enum GridOverlay {
+    Off,
+    Grid,
+    #[default]
+    Cross,
+}
+
+int_params!(DelayParams<u16>      { step: 8, min: 0, max: 512, format: IntFormat::Scaled { divisor: AUDIO_FS / 1000, precision: 1, suffix: "ms" } });
 int_params!(PCScaleParams<u8>     { step: 1, min: 0, max: 15 });
 int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
 int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
-int_params!(TriggerLvlParams<i16> { step: 512, min: -16384, max: 16384 });
-int_params!(PosParams<i16>       { step: 25, min: -500, max: 500 });
+int_params!(TriggerLvlParams<i16> { step: 500, min: -16000, max: 16000, format: IntFormat::Scaled { divisor: 4000, precision: 2, suffix: "V" } });
+int_params!(PosParams<i16>       { step: 1, min: -40, max: 40, format: IntFormat::Scaled { divisor: 4, precision: 2, suffix: "d" } });
 int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 60 });
+int_params!(NChannelsParams<u8>   { step: 1, min: 1, max: 4 });
 
 button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });
 
@@ -98,12 +91,12 @@ pub struct HelpOpts {
 pub struct VectorOpts {
     #[option(0)]
     pub x_offset: IntOption<PosParams>,
-    #[option(9)]
-    pub x_scale: IntOption<ScaleParams>,
+    #[option(VScale::Scale2V)]
+    pub x_scale: EnumOption<VScale>,
     #[option(0)]
     pub y_offset: IntOption<PosParams>,
-    #[option(9)]
-    pub y_scale: IntOption<ScaleParams>,
+    #[option(VScale::Scale2V)]
+    pub y_scale: EnumOption<VScale>,
     #[option(4)]
     pub i_offset: IntOption<IntensityParams>,
     #[option(0)]
@@ -136,6 +129,10 @@ pub struct BeamOpts {
     pub ui_hue: IntOption<HueParams>,
     #[option]
     pub palette: EnumOption<ColorPalette>,
+    #[option]
+    pub grid: EnumOption<GridOverlay>,
+    #[option(4)]
+    pub grid_i: IntOption<IntensityParams>,
 }
 
 #[derive(OptionPage, Clone)]
@@ -148,6 +145,8 @@ pub struct MiscOpts {
     pub usb_mode: EnumOption<USBMode>,
     #[option]
     pub rotation: EnumOption<Rotate>,
+    #[option]
+    pub help: EnumOption<HelpPage>,
     #[option(false)]
     pub save_opts: ButtonOption<OneShotButtonParams>,
     #[option(false)]
@@ -156,32 +155,32 @@ pub struct MiscOpts {
 
 #[derive(OptionPage, Clone)]
 pub struct ScopeOpts1 {
+    #[option(-14)]
+    pub ypos0: IntOption<PosParams>,
+    #[option(-5)]
+    pub ypos1: IntOption<PosParams>,
+    #[option(5)]
+    pub ypos2: IntOption<PosParams>,
+    #[option(14)]
+    pub ypos3: IntOption<PosParams>,
+    #[option(4)]
+    pub n_channels: IntOption<NChannelsParams>,
+}
+
+#[derive(OptionPage, Clone)]
+pub struct ScopeOpts2 {
+    #[option(VScale::Scale4V)]
+    pub yscale: EnumOption<VScale>,
     #[option]
     pub timebase: EnumOption<Timebase>,
     #[option]
     pub trig_mode: EnumOption<TriggerMode>,
     #[option]
     pub trig_lvl: IntOption<TriggerLvlParams>,
-    #[option(6)]
-    pub yscale: IntOption<ScaleParams>,
-    #[option(9)]
-    pub xscale: IntOption<ScaleParams>,
     #[option(8)]
     pub intensity: IntOption<IntensityParams>,
     #[option(10)]
     pub hue: IntOption<HueParams>,
-}
-
-#[derive(OptionPage, Clone)]
-pub struct ScopeOpts2 {
-    #[option(-250)]
-    pub ypos0: IntOption<PosParams>,
-    #[option(-75)]
-    pub ypos1: IntOption<PosParams>,
-    #[option(75)]
-    pub ypos2: IntOption<PosParams>,
-    #[option(250)]
-    pub ypos3: IntOption<PosParams>,
 }
 
 #[derive(Options, Clone)]
@@ -195,6 +194,7 @@ pub struct Opts {
     pub scope1: ScopeOpts1,
     #[page(Page::Scope2)]
     pub scope2: ScopeOpts2,
+
     #[page(Page::Vector)]
     pub vector: VectorOpts,
     #[page(Page::Delay)]

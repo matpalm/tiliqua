@@ -45,6 +45,10 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
     critical_section::with(|cs| {
         let mut app = app.borrow_ref_mut(cs);
         app.ui.update();
+        if app.ui.opts.misc.help.value == HelpPage::Off
+            && app.ui.opts.tracker.page.value == Page::Help {
+            app.ui.opts.tracker.page.value = Page::Vector;
+        }
         app.ui.opts.misc.plot_type.value = match app.ui.opts.tracker.page.value {
             Page::Vector => PlotType::Vector,
             Page::Scope1 => PlotType::Scope,
@@ -131,12 +135,28 @@ fn main() -> ! {
         timer.enable_tick_isr(TIMER0_ISR_PERIOD_MS,
                               pac::Interrupt::TIMER0);
 
-        let vscope    = peripherals.VECTOR_PERIPH;
-        let scope     = peripherals.SCOPE_PERIPH;
+        let mut vscope = Vector0::new(peripherals.VECTOR_PERIPH);
+        let mut scope = Scope0::new(peripherals.SCOPE_PERIPH, 6);
         let xbeam_mux = peripherals.XBEAM_PERIPH;
+        let overlay_periph = peripherals.OVERLAY_PERIPH;
         let mut first = true;
 
         let mut usb_cc_attached = false;
+
+        // Grid overlay configuration (ppd is constant after init)
+        let (ppd_x, ppd_y) = vscope.pixels_per_div();
+        overlay_periph.grid_spacing().write(|w| unsafe {
+            w.spacing_x().bits(ppd_x as u8);
+            w.spacing_y().bits(ppd_y as u8)
+        });
+        overlay_periph.grid_start().write(|w| unsafe {
+            w.start_x().bits(((display.size().width / 2) % ppd_x) as u8);
+            w.start_y().bits((((display.size().height / 2) + 1) % ppd_y) as u8)
+        });
+        overlay_periph.grid_offset().write(|w| unsafe {
+            w.offset_x().bits((display.size().width / 2) as u16);
+            w.offset_y().bits((display.size().height / 2) as u16)
+        });
 
         loop {
 
@@ -201,39 +221,33 @@ fn main() -> ! {
                 });
             }
 
-            vscope.xoffset().write(|w| unsafe { w.value().bits(opts.vector.x_offset.value as u16) } );
-            vscope.yoffset().write(|w| unsafe { w.value().bits(opts.vector.y_offset.value as u16) } );
-            vscope.xscale().write(|w| unsafe { w.scale().bits(0xf-opts.vector.x_scale.value) } );
-            vscope.yscale().write(|w| unsafe { w.scale().bits(0xf-opts.vector.y_scale.value) } );
-            vscope.pscale().write(|w| unsafe { w.scale().bits(0xf-opts.vector.i_scale.value) } );
-            vscope.intensity().write(|w| unsafe { w.intensity().bits(opts.vector.i_offset.value) } );
-            vscope.cscale().write(|w| unsafe { w.scale().bits(0xf-opts.vector.c_scale.value) } );
-            vscope.hue().write(|w| unsafe { w.hue().bits(opts.vector.c_offset.value) } );
+            let (ppd_x, ppd_y) = vscope.pixels_per_div();
+            vscope.set_xoffset_px(opts.vector.x_offset.value * (ppd_x / 4) as i16);
+            vscope.set_yoffset_px(opts.vector.y_offset.value * (ppd_y / 4) as i16);
+            vscope.set_xscale(opts.vector.x_scale.value);
+            vscope.set_yscale(opts.vector.y_scale.value);
+            vscope.set_pscale(opts.vector.i_scale.value);
+            vscope.set_intensity(opts.vector.i_offset.value);
+            vscope.set_cscale(opts.vector.c_scale.value);
+            vscope.set_hue(opts.vector.c_offset.value);
 
-            scope.hue().write(|w| unsafe { w.hue().bits(opts.scope1.hue.value) } );
-            scope.intensity().write(|w| unsafe { w.intensity().bits(opts.scope1.intensity.value) } );
-
-            scope.trigger_lvl().write(|w| unsafe { w.trigger_level().bits(opts.scope1.trig_lvl.value as u16) } );
-            scope.xscale().write(|w| unsafe { w.xscale().bits(0xf-opts.scope1.xscale.value) } );
-            scope.yscale().write(|w| unsafe { w.yscale().bits(0xf-opts.scope1.yscale.value) } );
-            let timebase_value = match opts.scope1.timebase.value {
-                Timebase::Timebase1s    => 3,
-                Timebase::Timebase500ms => 6,
-                Timebase::Timebase250ms => 13,
-                Timebase::Timebase100ms => 32,
-                Timebase::Timebase50ms  => 64,
-                Timebase::Timebase25ms  => 128,
-                Timebase::Timebase10ms  => 320,
-                Timebase::Timebase5ms   => 640,
-                Timebase::Timebase2p5ms => 1280,
-                Timebase::Timebase1ms   => 3200,
-            };
-            scope.timebase().write(|w| unsafe { w.timebase().bits(timebase_value) } );
-
-            scope.ypos0().write(|w| unsafe { w.ypos().bits(opts.scope2.ypos0.value as u16) } );
-            scope.ypos1().write(|w| unsafe { w.ypos().bits(opts.scope2.ypos1.value as u16) } );
-            scope.ypos2().write(|w| unsafe { w.ypos().bits(opts.scope2.ypos2.value as u16) } );
-            scope.ypos3().write(|w| unsafe { w.ypos().bits(opts.scope2.ypos3.value as u16) } );
+            scope.set_hue(opts.scope2.hue.value);
+            scope.set_intensity(opts.scope2.intensity.value);
+            scope.set_trigger_level(opts.scope2.trig_lvl.value);
+            scope.set_yscale(opts.scope2.yscale.value);
+            scope.set_timebase(opts.scope2.timebase.value);
+            let (_, sppd) = scope.pixels_per_div();
+            let n_ch = opts.scope1.n_channels.value;
+            let ypos = [opts.scope1.ypos0.value, opts.scope1.ypos1.value,
+                         opts.scope1.ypos2.value, opts.scope1.ypos3.value];
+            for ch in 0..4u8 {
+                let pos = if ch < n_ch {
+                    ypos[ch as usize] * (sppd / 4) as i16
+                } else {
+                    750 // hide inactive channels off-screen
+                };
+                scope.set_ypos_px(ch.into(), pos);
+            }
 
             // Only connect USB PHY if the TUSB322 Type-C controller says we are attached.
             // This fixes enumeration issues on some machines when using typec <-> typec cables.
@@ -254,6 +268,19 @@ fn main() -> ! {
                       w.usb_connect().bit(usb_cc_attached)
                 } );
 
+            // Grid overlay style/pixel (changes with options)
+            let grid_style: u8 = if on_help_page { 0 } else {
+                match opts.beam.grid.value {
+                    GridOverlay::Off => 0,
+                    GridOverlay::Grid => 1,
+                    GridOverlay::Cross => 2,
+                }
+            };
+            overlay_periph.flags().write(|w| unsafe {
+                w.grid_style().bits(grid_style);
+                w.grid_pixel().bits(((opts.beam.grid_i.value as u8) << 4) | opts.beam.ui_hue.value)
+            });
+
             xbeam_mux.delay0().write(|w| unsafe { w.value().bits(
                     delay_smoothers[0].proc_u16(opts.delay.delay_x.value)) });
             xbeam_mux.delay1().write(|w| unsafe { w.value().bits(
@@ -267,23 +294,15 @@ fn main() -> ! {
 
 
             if opts.tracker.page.value == Page::Help {
-                scope.flags().write(
-                    |w| w.enable().bit(false) );
-                vscope.flags().write(
-                    |w| w.enable().bit(false) );
+                scope.set_enabled(false, false);
+                vscope.set_enabled(false);
             } else {
                 if opts.misc.plot_type.value == PlotType::Vector {
-                    scope.flags().write(
-                        |w| w.enable().bit(false) );
-                    vscope.flags().write(
-                        |w| w.enable().bit(true) );
+                    scope.set_enabled(false, false);
+                    vscope.set_enabled(true);
                 } else {
-                    scope.flags().write(
-                        |w| { w.enable().bit(true);
-                              w.trigger_always().bit(opts.scope1.trig_mode.value == TriggerMode::Always)
-                        } );
-                    vscope.flags().write(
-                        |w| w.enable().bit(false) );
+                    scope.set_enabled(true, opts.scope2.trig_mode.value == TriggerMode::Always);
+                    vscope.set_enabled(false);
                 }
             }
 

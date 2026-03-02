@@ -280,8 +280,8 @@ class I2SCalibrator(wiring.Component):
     # Set values and assert `valid` until `ready` is strobed by this core, which
     # indicates the calibration memory write has been committed.
     cal_mem_write: In(stream.Signature(data.StructLayout({
-        "a": signed(2 + ASQ.width),
-        "b": signed(2 + ASQ.width),
+        "a": signed(3 + ASQ.f_bits),
+        "b": signed(3 + ASQ.f_bits),
         "channel": unsigned(exact_log2(I2STDM.N_CHANNELS*2))
         })))
 
@@ -355,7 +355,7 @@ class I2SCalibrator(wiring.Component):
                 with m.If(self.strobe):
                     m.d.audio += [
                         cal_read.addr.eq(self.channel),
-                        in_sample.as_value().eq(self.i_uncal)
+                        in_sample.as_value().eq(self.i_uncal>>(ASQ.i_bits-1))
                     ]
                     with m.If(dac_fifo.r_rdy):
                         with m.If(self.channel == (I2STDM.N_CHANNELS - 1)):
@@ -380,7 +380,7 @@ class I2SCalibrator(wiring.Component):
                 ]
                 m.next = "PROCESS_DAC"
             with m.State("PROCESS_DAC"):
-                m.d.audio += self.o_uncal.eq(out_sample.as_value())
+                m.d.audio += self.o_uncal.eq((out_sample<<(ASQ.i_bits-1)).saturate(ASQ).as_value())
                 m.next = "IDLE"
 
         #
@@ -898,12 +898,12 @@ class EurorackPmod(wiring.Component):
             with m.If(self.led_mode[n]):
                 if n <= 3:
                     with m.If(self.jack[n]):
-                        m.d.sync += i2c_master.led[n].eq(self.calibrator.o_cal_peek[n].as_value()>>8),
+                        m.d.sync += i2c_master.led[n].eq(self.calibrator.o_cal_peek[n].as_value()[ASQ.width-8:]),
                     with m.Else():
                         m.d.sync += i2c_master.led[n].eq(0),
                 else:
                     with m.If(self.i_cal.valid):
-                        m.d.sync += i2c_master.led[n].eq(self.i_cal.payload[n-4].as_value()>>8),
+                        m.d.sync += i2c_master.led[n].eq(self.i_cal.payload[n-4].as_value()[ASQ.width-8:]),
             with m.Else():
                 m.d.sync += i2c_master.led[n].eq(self.led[n]),
 
@@ -989,10 +989,10 @@ class EurorackPmod(wiring.Component):
 class Peripheral(wiring.Component):
 
     class ISampleReg(csr.Register, access="r"):
-        sample: csr.Field(csr.action.R, unsigned(16))
+        sample: csr.Field(csr.action.R, unsigned(32))
 
     class OSampleReg(csr.Register, access="w"):
-        sample: csr.Field(csr.action.W, unsigned(16))
+        sample: csr.Field(csr.action.W, unsigned(32))
 
     class TouchReg(csr.Register, access="r"):
         touch: csr.Field(csr.action.R, unsigned(8))
@@ -1008,6 +1008,7 @@ class Peripheral(wiring.Component):
 
     class InfoReg(csr.Register, access="r"):
         f_bits: csr.Field(csr.action.R, unsigned(8))
+        counts_per_mv: csr.Field(csr.action.R, unsigned(16))
 
     class FlagsReg(csr.Register, access="w"):
         mute: csr.Field(csr.action.W, unsigned(1))
@@ -1026,7 +1027,7 @@ class Peripheral(wiring.Component):
         self.pmod = pmod
         self.poke_outputs = poke_outputs
 
-        regs = csr.Builder(addr_width=6, data_width=8)
+        regs = csr.Builder(addr_width=7, data_width=8)
 
         # Calibration constant writing
         self._cal_a = regs.add("cal_a", self.CalibrationConstant())
@@ -1071,6 +1072,7 @@ class Peripheral(wiring.Component):
             self._touch_err.f.value.r_data.eq(self.pmod.touch_err),
             self._jack.f.jack.r_data.eq(self.pmod.jack),
             self._info.f.f_bits.r_data.eq(self.pmod.i_cal.payload[0].shape().f_bits),
+            self._info.f.counts_per_mv.r_data.eq(1 << (ASQ.f_bits - 13)),
         ]
 
         mute_reg = Signal(init=0)
@@ -1094,7 +1096,10 @@ class Peripheral(wiring.Component):
                 m.d.sync += self.pmod.led[i].eq(self._led[i].f.led.w_data)
 
         for i in range(4):
-            m.d.comb += self._sample_i[i].f.sample.r_data.eq(self.pmod.calibrator.o_cal_peek[i])
+            # Sign-extend ASQ sample to 32 bits for CSR readback.
+            sample_i32 = Signal(signed(32))
+            m.d.comb += sample_i32.eq(self.pmod.calibrator.o_cal_peek[i])
+            m.d.comb += self._sample_i[i].f.sample.r_data.eq(sample_i32)
 
         if self.poke_outputs:
             m.d.comb += self.pmod.i_cal.valid.eq(1)

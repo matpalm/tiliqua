@@ -17,7 +17,7 @@ impl<G: GrainPlayer> Channel<G> {
     }
 
     /// Update grain player from channel options and input state
-    pub fn update(&mut self, opts: &ChannelOpts, max_samples: u32, touch_idx: usize, touch: &[u8; 8], jack: u8, cv: i16) {
+    pub fn update(&mut self, opts: &ChannelOpts, max_samples: u32, touch_idx: usize, touch: &[u8; 8], jack: u8, cv: i32) {
         let size = max_samples;
         let ui_start = (opts.start.value as i32).max(5) as u32;
         let start = size.saturating_sub(ui_start);

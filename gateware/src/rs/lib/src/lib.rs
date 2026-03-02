@@ -14,3 +14,4 @@ pub mod edid;
 pub mod bootinfo;
 pub mod eeprominfo;
 pub mod mono_6x12_optimized;
+pub mod scope;

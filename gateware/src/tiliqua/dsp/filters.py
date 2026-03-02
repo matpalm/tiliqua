@@ -220,9 +220,6 @@ class FIR(wiring.Component):
         sample per :py:`stride_o` input samples.
     """
 
-    i: In(stream.Signature(ASQ))
-    o: Out(stream.Signature(ASQ))
-
     def __init__(self,
                  fs:               int,
                  filter_cutoff_hz: int,
@@ -230,7 +227,8 @@ class FIR(wiring.Component):
                  filter_type:      str='lowpass',
                  prescale:         float=1,
                  stride_i:         int=1,
-                 stride_o:         int=1):
+                 stride_o:         int=1,
+                 shape=ASQ):
         """
         fs : int
             Sample rate of the filter, used for calculating FIR coefficients.
@@ -262,7 +260,10 @@ class FIR(wiring.Component):
             :py:`stride_o == M`, only 1 output sample is produced per M input
             samples. This does not reduce LUT/RAM usage, but avoids performing
             MACs to produce samples that will be discarded.
+        shape : fixed.Shape
+            Fixed-point shape for input/output samples. Defaults to ASQ.
         """
+        self.shape = shape
         taps = signal.firwin(numtaps=filter_order, cutoff=filter_cutoff_hz,
                              fs=fs, pass_zero=filter_type, window='hamming')
         assert len(taps) % stride_i == 0
@@ -270,14 +271,17 @@ class FIR(wiring.Component):
         self.prescale   = prescale
         self.stride_i   = stride_i
         self.stride_o   = stride_o
-        super().__init__()
+        super().__init__({
+            "i": In(stream.Signature(shape)),
+            "o": Out(stream.Signature(shape)),
+        })
 
     def elaborate(self, platform):
         m = Module()
 
         # Tap and accumulator sizes
 
-        self.ctype = fixed.SQ(2, ASQ.f_bits)
+        self.ctype = fixed.SQ(2, self.shape.f_bits)
 
         n = len(self.taps_float)
 

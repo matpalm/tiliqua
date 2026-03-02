@@ -239,7 +239,7 @@ fn main() -> ! {
         timer.enable_tick_isr(TIMER0_ISR_PERIOD_MS, 
                             pac::Interrupt::TIMER0);
 
-        let scope = peripherals.SCOPE_PERIPH;
+        let mut scope = Scope0::new(peripherals.SCOPE_PERIPH, 7);
 
         let h_active = display.size().width;
         let v_active = display.size().height;
@@ -360,27 +360,20 @@ fn main() -> ! {
             }
 
             // Update scope settings
-            scope.trigger_lvl().write(|w| unsafe { w.trigger_level().bits(opts.scope.trig_lvl.value as u16) });
-            scope.xscale().write(|w| unsafe { w.xscale().bits(opts.scope.xscale.value) });
-            scope.yscale().write(|w| unsafe { w.yscale().bits(opts.scope.yscale.value) });
-            scope.timebase().write(|w| unsafe { w.timebase().bits(opts.scope.timebase.value) });
-
-            scope.hue().write(|w| unsafe { w.hue().bits(hue) } );
-            scope.ypos0().write(|w| unsafe { w.ypos().bits(opts.scope.ypos0.value as u16) });
-            scope.ypos1().write(|w| unsafe { w.ypos().bits(opts.scope.ypos1.value as u16) });
-            scope.ypos2().write(|w| unsafe { w.ypos().bits(opts.scope.ypos2.value as u16) });
-            scope.ypos3().write(|w| unsafe { w.ypos().bits(opts.scope.ypos3.value as u16) });
-
-            scope.xpos().write(|w| unsafe { w.xpos().bits(opts.scope.xpos.value as u16) } );
+            scope.set_trigger_level(opts.scope.trig_lvl.value);
+            scope.set_yscale(opts.scope.yscale.value);
+            scope.set_timebase(opts.scope.timebase.value);
+            scope.set_hue(hue);
+            scope.set_ypos_px(0, opts.scope.ypos0.value);
+            scope.set_ypos_px(1, opts.scope.ypos1.value);
+            scope.set_ypos_px(2, opts.scope.ypos2.value);
+            scope.set_ypos_px(3, opts.scope.ypos3.value);
+            scope.set_xpos_px(opts.scope.xpos.value);
 
             if on_help_page {
-                scope.flags().write(
-                    |w| w.enable().bit(false) );
+                scope.set_enabled(false, false);
             } else {
-                scope.flags().write(
-                    |w| { w.enable().bit(true);
-                          w.trigger_always().bit(opts.scope.trig_mode.value == options::TriggerMode::Always)
-                    } );
+                scope.set_enabled(true, opts.scope.trig_mode.value == options::TriggerMode::Always);
             }
         }
     })

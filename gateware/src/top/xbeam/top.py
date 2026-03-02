@@ -93,7 +93,7 @@ import os
 import sys
 
 from amaranth import *
-from amaranth.lib import data, fifo, stream, wiring
+from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out, connect, flipped
 from amaranth_soc import csr
 
@@ -102,7 +102,8 @@ from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.periph import eurorack_pmod
-from tiliqua.raster import scope
+from tiliqua.periph import overlay
+from tiliqua.raster import PSQ, scope
 from tiliqua.raster.plot import FramebufferPlotter
 from tiliqua.tiliqua_soc import TiliquaSoc
 
@@ -188,32 +189,41 @@ class XbeamSoc(TiliquaSoc):
 
     def __init__(self, **kwargs):
 
+        self.overlay_periph = overlay.Peripheral()
+
         # don't finalize the CSR bridge in TiliquaSoc, we're adding more peripherals.
-        super().__init__(finalize_csr_bridge=False, **kwargs)
+        super().__init__(finalize_csr_bridge=False,
+                         fb_overlay=self.overlay_periph.overlay, **kwargs)
 
         # Extract module docstring for help page
 
         self.vector_periph_base = 0x00001000
         self.scope_periph_base  = 0x00001100
         self.xbeam_periph_base  = 0x00001200
+        self.overlay_periph_base = 0x00001300
 
         # Dedicated framebuffer plotter for scope peripherals (5 ports: 1 vector + 4 scope channels)
         self.plotter = FramebufferPlotter(
             bus_signature=self.psram_periph.bus.signature.flip(), n_ports=5)
         self.psram_periph.add_master(self.plotter.bus)
 
-        # Vectorscope with upsampling and CSR registers
-        self.vector_periph = scope.VectorPeripheral(
-            n_upsample=8)
+        self.n_upsample = 8 if self.clock_settings.audio_clock.is_192khz() else 32
+
+        # Vectorscope with CSR registers
+        self.vector_periph = scope.VectorPeripheral()
         self.csr_decoder.add(self.vector_periph.bus, addr=self.vector_periph_base, name="vector_periph")
 
         # 4-ch oscilloscope with CSR registers
-        self.scope_periph = scope.ScopePeripheral()
+        self.scope_periph = scope.ScopePeripheral(
+            fs=self.clock_settings.audio_clock.fs() * self.n_upsample)
         self.csr_decoder.add(self.scope_periph.bus, addr=self.scope_periph_base, name="scope_periph")
 
         # Extra peripheral for some global control flags.
         self.xbeam_periph = XbeamPeripheral()
         self.csr_decoder.add(self.xbeam_periph.bus, addr=self.xbeam_periph_base, name="xbeam_periph")
+
+        # Grid overlay peripheral
+        self.csr_decoder.add(self.overlay_periph.bus, addr=self.overlay_periph_base, name="overlay_periph")
 
         # now we can freeze the memory map
         self.finalize_csr_bridge()
@@ -229,13 +239,14 @@ class XbeamSoc(TiliquaSoc):
         m.submodules.vector_periph = self.vector_periph
         m.submodules.scope_periph = self.scope_periph
         m.submodules.xbeam_periph = self.xbeam_periph
+        m.submodules.overlay_periph = self.overlay_periph
 
         # Connect vector/scope pixel requests to plotter channels
         wiring.connect(m, self.vector_periph.o, self.plotter.i[0])
         for n in range(4):
             wiring.connect(m, self.scope_periph.o[n], self.plotter.i[n+1])
 
-        # Connect framebuffer propreties to plotter backend
+        # Connect framebuffer properties to plotter backend
         wiring.connect(m, wiring.flipped(self.fb.fbp), self.plotter.fbp)
 
         # FIXME: bit of a hack so we can pluck out peripherals from `tiliqua_soc`
@@ -260,18 +271,28 @@ class XbeamSoc(TiliquaSoc):
 
         wiring.connect(m, self.xbeam_periph.delay_o, pmod0.i_cal)
 
-        m.submodules.plot_fifo = plot_fifo = fifo.SyncFIFOBuffered(
-            width=data.ArrayLayout(eurorack_pmod.ASQ, 4).as_shape().width, depth=256)
+        m.submodules.plot_fifo = plot_fifo = dsp.SyncFIFOBuffered(
+            shape=data.ArrayLayout(PSQ, 4), depth=256)
 
         with m.If(self.xbeam_periph.show_outputs):
-            dsp.connect_peek(m, pmod0.i_cal, plot_fifo.w_stream)
+            dsp.connect_peek(m, pmod0.i_cal, plot_fifo.i)
         with m.Else():
-            dsp.connect_peek(m, pmod0.o_cal, plot_fifo.w_stream)
+            dsp.connect_peek(m, pmod0.o_cal, plot_fifo.i)
+
+        # Upsample all 4 channels before routing to scope/vector peripherals
+        fs = self.clock_settings.audio_clock.fs()
+        m.submodules.up_split4 = up_split4 = dsp.Split(n_channels=4, source=plot_fifo.o, shape=PSQ)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4, shape=PSQ)
+        for ch in range(4):
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1, shape=PSQ)
+            setattr(m.submodules, f"resample{ch}", r)
+            wiring.connect(m, up_split4.o[ch], r.i)
+            wiring.connect(m, r.o, up_merge4.i[ch])
 
         with m.If(self.scope_periph.soc_en):
-            wiring.connect(m, plot_fifo.r_stream, self.scope_periph.i)
+            wiring.connect(m, up_merge4.o, self.scope_periph.i)
         with m.Else():
-            wiring.connect(m, plot_fifo.r_stream, self.vector_periph.i)
+            wiring.connect(m, up_merge4.o, self.vector_periph.i)
 
         return m
 

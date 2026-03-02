@@ -16,6 +16,7 @@ from amaranth_future import fixed
 
 from .. import dsp
 from ..dsp import ASQ
+from . import PSQ, PSQ_BASE_FBITS, psq_from_volts
 from .plot import PlotRequest
 from .stroke import Stroke
 
@@ -37,9 +38,12 @@ class VectorPeripheral(wiring.Component):
     class Position(csr.Register, access="w"):
         value: csr.Field(csr.action.W, unsigned(16))
 
-    def __init__(self, **kwargs):
+    class PixelsPerVolt(csr.Register, access="r"):
+        pixels_per_volt: csr.Field(csr.action.R, unsigned(16))
 
-        self.stroke = Stroke(**kwargs)
+    def __init__(self):
+
+        self.stroke = Stroke()
 
         regs = csr.Builder(addr_width=6, data_width=8)
 
@@ -52,11 +56,12 @@ class VectorPeripheral(wiring.Component):
         self._yscale    = regs.add("yscale",    self.ScaleReg(),     offset=0x18)
         self._pscale    = regs.add("pscale",    self.ScaleReg(),     offset=0x1C)
         self._cscale    = regs.add("cscale",    self.ScaleReg(),     offset=0x20)
+        self._pixels_per_volt = regs.add("pixels_per_volt", self.PixelsPerVolt(), offset=0x24)
 
         self._bridge = csr.Bridge(regs.as_memory_map())
 
         super().__init__({
-            "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
+            "i": In(stream.Signature(data.ArrayLayout(PSQ, 4))),
             # CSR bus
             "bus": In(csr.Signature(addr_width=regs.addr_width, data_width=regs.data_width)),
             # Plot request output to shared backend
@@ -72,6 +77,9 @@ class VectorPeripheral(wiring.Component):
 
         wiring.connect(m, wiring.flipped(self.i), self.stroke.i)
         wiring.connect(m, wiring.flipped(self.bus), self._bridge.bus)
+
+        m.d.comb += self._pixels_per_volt.f.pixels_per_volt.r_data.eq(
+            psq_from_volts(1).reshape(PSQ_BASE_FBITS))
 
         with m.If(self._hue.f.hue.w_stb):
             m.d.sync += self.stroke.hue.eq(self._hue.f.hue.w_data)
@@ -118,7 +126,7 @@ class ScopePeripheral(wiring.Component):
         intensity: csr.Field(csr.action.W, unsigned(8))
 
     class Timebase(csr.Register, access="w"):
-        timebase: csr.Field(csr.action.W, unsigned(16))
+        timebase: csr.Field(csr.action.W, unsigned(32))
 
     class XScale(csr.Register, access="w"):
         xscale: csr.Field(csr.action.W, unsigned(8))
@@ -135,10 +143,17 @@ class ScopePeripheral(wiring.Component):
     class YPosition(csr.Register, access="w"):
         ypos: csr.Field(csr.action.W, unsigned(16))
 
-    def __init__(self, n_channels=4, **kwargs):
+    class PixelsPerVolt(csr.Register, access="r"):
+        pixels_per_volt: csr.Field(csr.action.R, unsigned(16))
 
+    class Fs(csr.Register, access="r"):
+        fs: csr.Field(csr.action.R, unsigned(32))
+
+    def __init__(self, n_channels=4, fs=48000):
+
+        self.fs = fs
         self.n_channels = n_channels
-        self.strokes = [Stroke(**kwargs)
+        self.strokes = [Stroke()
                         for _ in range(self.n_channels)]
 
         regs = csr.Builder(addr_width=6, data_width=8)
@@ -152,10 +167,12 @@ class ScopePeripheral(wiring.Component):
         self._xpos           = regs.add("xpos",           self.XPosition(),     offset=0x1C)
         self._ypos           = [regs.add(f"ypos{i}",      self.YPosition(),
                                 offset=(0x20+i*4)) for i in range(self.n_channels)]
+        self._pixels_per_volt = regs.add("pixels_per_volt", self.PixelsPerVolt(), offset=0x30)
+        self._fs              = regs.add("fs",              self.Fs(),             offset=0x34)
 
         self._bridge = csr.Bridge(regs.as_memory_map())
         super().__init__({
-            "i": In(stream.Signature(data.ArrayLayout(ASQ, self.n_channels))),
+            "i": In(stream.Signature(data.ArrayLayout(PSQ, self.n_channels))),
             # CSR bus
             "bus": In(csr.Signature(addr_width=regs.addr_width, data_width=regs.data_width)),
             # Pixel request outputs, one for each channel
@@ -167,16 +184,19 @@ class ScopePeripheral(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        timebase = Signal(shape=dsp.ASQ)
-        trigger_lvl = Signal(shape=dsp.ASQ)
+        trigger_lvl = Signal(shape=PSQ)
         trigger_always = Signal()
 
-        self.isplit4 = dsp.Split(self.n_channels)
+        self.isplit4 = dsp.Split(self.n_channels, shape=PSQ)
 
         wiring.connect(m, wiring.flipped(self.i), self.isplit4.i)
 
         m.submodules.bridge = self._bridge
         wiring.connect(m, wiring.flipped(self.bus), self._bridge.bus)
+
+        m.d.comb += self._pixels_per_volt.f.pixels_per_volt.r_data.eq(
+            psq_from_volts(1).reshape(PSQ_BASE_FBITS))
+        m.d.comb += self._fs.f.fs.r_data.eq(self.fs)
 
         m.submodules += self.strokes
 
@@ -188,11 +208,12 @@ class ScopePeripheral(wiring.Component):
         m.submodules.isplit4 = self.isplit4
 
         # 2 copies of input channel 0
-        m.submodules.irep2 = irep2 = dsp.Split(2, replicate=True, source=self.isplit4.o[0])
+        m.submodules.irep2 = irep2 = dsp.Split(2, replicate=True, source=self.isplit4.o[0], shape=PSQ)
 
         # Send one copy to trigger => ramp => X
-        m.submodules.trig = trig = dsp.Trigger()
-        m.submodules.ramp = ramp = dsp.Ramp()
+        m.submodules.trig = trig = dsp.Trigger(shape=PSQ)
+        m.submodules.ramp = ramp = dsp.Ramp(shape=PSQ)
+        timebase = Signal(shape=dsp.Ramp.TIMEBASE_SQ)
         # Audio => Trigger
         dsp.connect_remap(m, irep2.o[0], trig.i, lambda o, i: [
             i.payload.sample.eq(o.payload),
@@ -205,10 +226,10 @@ class ScopePeripheral(wiring.Component):
         ])
 
         # Split ramp into 4 streams, one for each channel
-        m.submodules.rampsplit4 = rampsplit4 = dsp.Split(self.n_channels, replicate=True, source=ramp.o)
+        m.submodules.rampsplit4 = rampsplit4 = dsp.Split(self.n_channels, replicate=True, source=ramp.o, shape=PSQ)
 
         # Rasterize ch0: Ramp => X, Audio => Y
-        m.submodules.ch0_merge4 = ch0_merge4 = dsp.Merge(4)
+        m.submodules.ch0_merge4 = ch0_merge4 = dsp.Merge(4, shape=PSQ)
         # HACK for stable trigger despite periodic cache misses
         # TODO: modify ramp generation instead?
         dsp.connect_peek(m, ch0_merge4.o, self.strokes[0].i, always_ready=True)
@@ -218,7 +239,7 @@ class ScopePeripheral(wiring.Component):
 
         # Rasterize ch1-ch3: Ramp => X, Audio => Y
         for ch in range(1, self.n_channels):
-            ch_merge4 = dsp.Merge(4)
+            ch_merge4 = dsp.Merge(4, shape=PSQ)
             dsp.connect_peek(m, ch_merge4.o, self.strokes[ch].i, always_ready=True)
             m.submodules += ch_merge4
             ch_merge4.wire_valid(m, [2, 3])
@@ -226,8 +247,6 @@ class ScopePeripheral(wiring.Component):
             wiring.connect(m, self.isplit4.o[ch], ch_merge4.i[1])
 
         # Wishbone tweakables
-
-        asq_extra_bits = ASQ.f_bits - 15
 
         with m.If(self._flags.f.trigger_always.w_stb):
             m.d.sync += trigger_always.eq(self._flags.f.trigger_always.w_data)
@@ -241,7 +260,7 @@ class ScopePeripheral(wiring.Component):
                 m.d.sync += s.intensity.eq(self._intensity.f.intensity.w_data)
 
         with m.If(self._timebase.f.timebase.w_stb):
-            m.d.sync += timebase.as_value().eq(self._timebase.f.timebase.w_data<<asq_extra_bits)
+            m.d.sync += timebase.as_value().eq(self._timebase.f.timebase.w_data)
 
         with m.If(self._xscale.f.xscale.w_stb):
             for s in self.strokes:
@@ -252,7 +271,8 @@ class ScopePeripheral(wiring.Component):
                 m.d.sync += s.scale_y.eq(self._yscale.f.yscale.w_data)
 
         with m.If(self._trigger_lvl.f.trigger_level.w_stb):
-            m.d.sync += trigger_lvl.as_value().eq(self._trigger_lvl.f.trigger_level.w_data<<asq_extra_bits)
+            m.d.sync += trigger_lvl.as_value().eq(
+                self._trigger_lvl.f.trigger_level.w_data.as_signed() >> (PSQ_BASE_FBITS - PSQ.f_bits))
 
         with m.If(self._xpos.f.xpos.w_stb):
             for s in self.strokes:

@@ -237,10 +237,17 @@ fn main() -> ! {
             scope.set_yscale(opts.scope2.yscale.value);
             scope.set_timebase(opts.scope2.timebase.value);
             let (_, sppd) = scope.pixels_per_div();
-            scope.set_ypos_px(0, opts.scope1.ypos0.value * (sppd / 4) as i16);
-            scope.set_ypos_px(1, opts.scope1.ypos1.value * (sppd / 4) as i16);
-            scope.set_ypos_px(2, opts.scope1.ypos2.value * (sppd / 4) as i16);
-            scope.set_ypos_px(3, opts.scope1.ypos3.value * (sppd / 4) as i16);
+            let n_ch = opts.scope1.n_channels.value;
+            let ypos = [opts.scope1.ypos0.value, opts.scope1.ypos1.value,
+                         opts.scope1.ypos2.value, opts.scope1.ypos3.value];
+            for ch in 0..4u8 {
+                let pos = if ch < n_ch {
+                    ypos[ch as usize] * (sppd / 4) as i16
+                } else {
+                    750 // hide inactive channels off-screen
+                };
+                scope.set_ypos_px(ch.into(), pos);
+            }
 
             // Only connect USB PHY if the TUSB322 Type-C controller says we are attached.
             // This fixes enumeration issues on some machines when using typec <-> typec cables.

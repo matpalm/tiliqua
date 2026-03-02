@@ -377,10 +377,10 @@ fn main() -> ! {
             scope.set_trigger_level(opts.scope.trig_lvl.value);
             scope.set_yscale(opts.scope.yscale.value);
             scope.set_timebase(opts.scope.timebase.value);
-            scope.set_ypos_px(0, opts.scope.ypos0.value);
-            scope.set_ypos_px(1, opts.scope.ypos1.value);
-            scope.set_ypos_px(2, opts.scope.ypos2.value);
-            scope.set_ypos_px(3, opts.scope.ypos3.value);
+            scope.set_ypos_px(0, opts.scope.ypos_out.value);
+            scope.set_ypos_px(1, opts.scope.ypos_aux.value);
+            scope.set_ypos_px(2, 500);
+            scope.set_ypos_px(3, 500);
 
 
             if opts.tracker.page.value == Page::Help {

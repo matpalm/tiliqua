@@ -127,6 +127,8 @@ pub struct BeamOpts {
 
 #[derive(OptionPage, Clone)]
 pub struct ScopeOpts {
+    #[option(VScale::Scale2V)]
+    pub yscale: EnumOption<VScale>,
     #[option(Timebase::Timebase5ms)]
     pub timebase: EnumOption<Timebase>,
     #[option]
@@ -134,15 +136,9 @@ pub struct ScopeOpts {
     #[option(512)]
     pub trig_lvl: IntOption<TriggerLvlParams>,
     #[option(-200)]
-    pub ypos0: IntOption<YPosParams>,
+    pub ypos_out: IntOption<YPosParams>,
     #[option(200)]
-    pub ypos1: IntOption<YPosParams>,
-    #[option(500)]
-    pub ypos2: IntOption<YPosParams>,
-    #[option(500)]
-    pub ypos3: IntOption<YPosParams>,
-    #[option(VScale::Scale2V)]
-    pub yscale: EnumOption<VScale>,
+    pub ypos_aux: IntOption<YPosParams>,
 }
 
 #[derive(Options, Clone)]

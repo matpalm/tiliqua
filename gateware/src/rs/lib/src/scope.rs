@@ -4,31 +4,33 @@ use strum_macros::{EnumIter, IntoStaticStr};
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
 #[strum(serialize_all = "kebab-case")]
 pub enum Timebase {
-    #[strum(serialize = "500ms")]
+    #[strum(serialize = "500ms/d")]
     Timebase500ms,
-    #[strum(serialize = "200ms")]
+    #[strum(serialize = "200ms/d")]
     Timebase200ms,
     #[default]
-    #[strum(serialize = "100ms")]
+    #[strum(serialize = "100ms/d")]
     Timebase100ms,
-    #[strum(serialize = "50ms")]
+    #[strum(serialize = "50ms/d")]
     Timebase50ms,
-    #[strum(serialize = "20ms")]
+    #[strum(serialize = "20ms/d")]
     Timebase20ms,
-    #[strum(serialize = "10ms")]
+    #[strum(serialize = "10ms/d")]
     Timebase10ms,
-    #[strum(serialize = "5ms")]
+    #[strum(serialize = "5ms/d")]
     Timebase5ms,
-    #[strum(serialize = "2ms")]
+    #[strum(serialize = "2ms/d")]
     Timebase2ms,
-    #[strum(serialize = "1ms")]
+    #[strum(serialize = "1ms/d")]
     Timebase1ms,
-    #[strum(serialize = "500us")]
+    #[strum(serialize = "500us/d")]
     Timebase500us,
-    #[strum(serialize = "200us")]
+    #[strum(serialize = "200us/d")]
     Timebase200us,
-    #[strum(serialize = "100us")]
+    #[strum(serialize = "100us/d")]
     Timebase100us,
+    #[strum(serialize = "50us/d")]
+    Timebase50us,
 }
 
 impl Timebase {
@@ -47,6 +49,7 @@ impl Timebase {
             Timebase::Timebase500us => 500,
             Timebase::Timebase200us => 200,
             Timebase::Timebase100us => 100,
+            Timebase::Timebase50us  => 50,
         }
     }
 }
@@ -54,22 +57,22 @@ impl Timebase {
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
 #[strum(serialize_all = "kebab-case")]
 pub enum VScale {
-    #[strum(serialize = "8V")]
+    #[strum(serialize = "8V/d")]
     Scale8V,
-    #[strum(serialize = "4V")]
+    #[strum(serialize = "4V/d")]
     Scale4V,
-    #[strum(serialize = "2V")]
+    #[strum(serialize = "2V/d")]
     Scale2V,
     #[default]
-    #[strum(serialize = "1V")]
+    #[strum(serialize = "1V/d")]
     Scale1V,
-    #[strum(serialize = "500mV")]
+    #[strum(serialize = "500mV/d")]
     Scale500mV,
-    #[strum(serialize = "250mV")]
+    #[strum(serialize = "250mV/d")]
     Scale250mV,
-    #[strum(serialize = "125mV")]
+    #[strum(serialize = "125mV/d")]
     Scale125mV,
-    #[strum(serialize = "64mV")]
+    #[strum(serialize = "64mV/d")]
     Scale64mV,
 }
 

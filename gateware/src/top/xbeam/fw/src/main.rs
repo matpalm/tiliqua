@@ -45,6 +45,10 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
     critical_section::with(|cs| {
         let mut app = app.borrow_ref_mut(cs);
         app.ui.update();
+        if app.ui.opts.misc.help.value == HelpPage::Off
+            && app.ui.opts.tracker.page.value == Page::Help {
+            app.ui.opts.tracker.page.value = Page::Vector;
+        }
         app.ui.opts.misc.plot_type.value = match app.ui.opts.tracker.page.value {
             Page::Vector => PlotType::Vector,
             Page::Scope1 => PlotType::Scope,
@@ -202,8 +206,8 @@ fn main() -> ! {
             }
 
             let (ppd_x, ppd_y) = vscope.pixels_per_div();
-            vscope.set_xoffset_px(opts.vector.x_offset.value * ppd_x as i16);
-            vscope.set_yoffset_px(opts.vector.y_offset.value * ppd_y as i16);
+            vscope.set_xoffset_px(opts.vector.x_offset.value * (ppd_x / 4) as i16);
+            vscope.set_yoffset_px(opts.vector.y_offset.value * (ppd_y / 4) as i16);
             vscope.set_xscale(opts.vector.x_scale.value);
             vscope.set_yscale(opts.vector.y_scale.value);
             vscope.set_pscale(opts.vector.i_scale.value);
@@ -211,16 +215,16 @@ fn main() -> ! {
             vscope.set_cscale(opts.vector.c_scale.value);
             vscope.set_hue(opts.vector.c_offset.value);
 
-            scope.set_hue(opts.scope1.hue.value);
-            scope.set_intensity(opts.scope1.intensity.value);
-            scope.set_trigger_level(opts.scope1.trig_lvl.value);
-            scope.set_yscale(opts.scope1.yscale.value);
-            scope.set_timebase(opts.scope1.timebase.value);
+            scope.set_hue(opts.scope2.hue.value);
+            scope.set_intensity(opts.scope2.intensity.value);
+            scope.set_trigger_level(opts.scope2.trig_lvl.value);
+            scope.set_yscale(opts.scope2.yscale.value);
+            scope.set_timebase(opts.scope2.timebase.value);
             let (_, sppd) = scope.pixels_per_div();
-            scope.set_ypos_px(0, opts.scope2.ypos0.value * sppd as i16);
-            scope.set_ypos_px(1, opts.scope2.ypos1.value * sppd as i16);
-            scope.set_ypos_px(2, opts.scope2.ypos2.value * sppd as i16);
-            scope.set_ypos_px(3, opts.scope2.ypos3.value * sppd as i16);
+            scope.set_ypos_px(0, opts.scope1.ypos0.value * (sppd / 4) as i16);
+            scope.set_ypos_px(1, opts.scope1.ypos1.value * (sppd / 4) as i16);
+            scope.set_ypos_px(2, opts.scope1.ypos2.value * (sppd / 4) as i16);
+            scope.set_ypos_px(3, opts.scope1.ypos3.value * (sppd / 4) as i16);
 
             // Only connect USB PHY if the TUSB322 Type-C controller says we are attached.
             // This fixes enumeration issues on some machines when using typec <-> typec cables.
@@ -261,7 +265,7 @@ fn main() -> ! {
                     scope.set_enabled(false, false);
                     vscope.set_enabled(true);
                 } else {
-                    scope.set_enabled(true, opts.scope1.trig_mode.value == TriggerMode::Always);
+                    scope.set_enabled(true, opts.scope2.trig_mode.value == TriggerMode::Always);
                     vscope.set_enabled(false);
                 }
             }

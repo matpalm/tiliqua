@@ -474,6 +474,7 @@ class TiliquaSoc(Component):
             f.write(f"pub const TOUCH_SENSOR_ORDER: [u8; 8] = {pmod_rev.touch_order()};\n")
             f.write(f"pub const PMOD_DEFAULT_CAL: [f32; 4] = {pmod_rev.default_calibration_rs()};\n")
             f.write(f"pub const BLIT_MEM_BASE: usize = 0x{self.blit_mem_base:x};\n")
+            f.write(f"pub const AUDIO_FS: u32            = {self.clock_settings.audio_clock.fs()};\n")
 
             f.write("// Extra constants specified by an SoC subclass:\n")
             if hasattr(self, '__doc__'):

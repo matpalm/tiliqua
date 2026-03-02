@@ -55,12 +55,13 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         let opts_ro = app.ui.opts.clone();
 
         if opts_ro.autocal.autozero.value == StopRun::Run {
-            let stimulus_raw = 4000 * opts_ro.autocal.volts.value as i16;
+            let counts_per_v = app.ui.pmod.counts_per_v();
+            let stimulus_raw = counts_per_v * opts_ro.autocal.volts.value as i32;
             let sample_i = app.ui.pmod.sample_i();
             let mut deltas = [0i16; 4];
             for ch in 0..4 {
                 let delta = (sample_i[ch] - stimulus_raw)/4;
-                if delta.abs() < 1024 {
+                if delta.abs() < counts_per_v / 4 {
                     if delta > 0 {
                         deltas[ch] = -1;
                     } else if delta < 0 {
@@ -304,11 +305,11 @@ fn print_pmod_state(s: &mut ReportString, pmod: &impl EurorackPmod)
 {
     let si = pmod.sample_i();
     write!(s, "audio_samples [ch0={:06} ch1={:06}\r\n",
-           si[0] as i16,
-           si[1] as i16).ok();
+           si[0],
+           si[1]).ok();
     write!(s, "               ch2={:06} ch3={:06}]\r\n",
-           si[2] as i16,
-           si[3] as i16).ok();
+           si[2],
+           si[3]).ok();
     write!(s, "audio_if      [jack={:x} touch_err={:x}]\r\n",
            pmod.jack(),
            pmod.touch_err()).ok();
@@ -507,7 +508,8 @@ fn main() -> ! {
                 (app.ui.opts.clone(), commit_to_eeprom)
             });
 
-            let stimulus_raw = 4000 * opts.autocal.volts.value as i16;
+            let counts_per_v = pmod.counts_per_v();
+            let stimulus_raw = counts_per_v * opts.autocal.volts.value as i32;
 
             draw::draw_options(&mut display, &opts, h_active/2-30, 70,
                                hue).ok();
@@ -548,10 +550,10 @@ fn main() -> ! {
             }
 
             if opts.tracker.page.value == Page::Autocal {
-                pmod.registers.sample_o0().write(|w| unsafe { w.sample().bits(stimulus_raw as u16) } );
-                pmod.registers.sample_o1().write(|w| unsafe { w.sample().bits(stimulus_raw as u16) } );
-                pmod.registers.sample_o2().write(|w| unsafe { w.sample().bits(stimulus_raw as u16) } );
-                pmod.registers.sample_o3().write(|w| unsafe { w.sample().bits(stimulus_raw as u16) } );
+                pmod.registers.sample_o0().write(|w| unsafe { w.sample().bits(stimulus_raw as u32) } );
+                pmod.registers.sample_o1().write(|w| unsafe { w.sample().bits(stimulus_raw as u32) } );
+                pmod.registers.sample_o2().write(|w| unsafe { w.sample().bits(stimulus_raw as u32) } );
+                pmod.registers.sample_o3().write(|w| unsafe { w.sample().bits(stimulus_raw as u32) } );
             }
 
             if opts.tracker.page.value == Page::Benchmark {
@@ -632,10 +634,11 @@ fn main() -> ! {
             if opts.tracker.page.value != Page::Report && opts.tracker.page.value != Page::Benchmark {
                 draw::draw_cal(&mut display, h_active/2-128, v_active/2-128, hue,
                                &[stimulus_raw, stimulus_raw, stimulus_raw, stimulus_raw],
-                               &pmod.sample_i()).ok();
+                               &pmod.sample_i(), counts_per_v).ok();
                 draw::draw_cal_constants(
                     &mut display, h_active/2-128, v_active/2+64, hue,
-                    &constants.cal.adc_scale, &constants.cal.adc_zero, &constants.cal.dac_scale, &constants.cal.dac_zero).ok();
+                    &constants.cal.adc_scale, &constants.cal.adc_zero, &constants.cal.dac_scale, &constants.cal.dac_zero,
+                    pmod.f_bits()).ok();
 
             }
 

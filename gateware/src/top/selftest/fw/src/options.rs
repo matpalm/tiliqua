@@ -39,7 +39,7 @@ pub enum StopRun {
     Run,
 }
 
-int_params!(RefVoltageParams<i8>     { step: 1, min: -8, max: 8 });
+int_params!(RefVoltageParams<i8>     { step: 1, min: -10, max: 10 });
 int_params!(CalTweakerParams<i16>    { step: 1, min: -256, max: 256 });
 
 button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });

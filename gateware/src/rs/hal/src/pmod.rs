@@ -2,7 +2,7 @@ pub trait EurorackPmod {
     fn jack(&self) -> u8;
     fn touch_err(&self) -> u8;
     fn touch(&self) -> [u8; 8];
-    fn sample_i(&self) -> [i16; 4];
+    fn sample_i(&self) -> [i32; 4];
     fn led_set_manual(&mut self, index: usize, value: i8);
     fn led_set_auto(&mut self, index: usize);
     fn led_all_auto(&mut self);
@@ -12,6 +12,7 @@ pub trait EurorackPmod {
     fn hard_reset(&mut self);
     fn set_aclk_unstable(&mut self);
     fn f_bits(&self) -> u8;
+    fn counts_per_v(&self) -> i32;
 }
 
 #[macro_export]
@@ -55,12 +56,13 @@ macro_rules! impl_eurorack_pmod {
                     ]
                 }
 
-                fn sample_i(&self) -> [i16; 4] {
+                fn sample_i(&self) -> [i32; 4] {
+                    // Gateware sign-extends ASQ to 32 bits.
                     [
-                        self.registers.sample_i0().read().bits() as i16,
-                        self.registers.sample_i1().read().bits() as i16,
-                        self.registers.sample_i2().read().bits() as i16,
-                        self.registers.sample_i3().read().bits() as i16,
+                        self.registers.sample_i0().read().bits() as i32,
+                        self.registers.sample_i1().read().bits() as i32,
+                        self.registers.sample_i2().read().bits() as i32,
+                        self.registers.sample_i3().read().bits() as i32,
                     ]
                 }
 
@@ -128,6 +130,10 @@ macro_rules! impl_eurorack_pmod {
 
                 fn f_bits(&self) -> u8 {
                     self.registers.info().read().f_bits().bits()
+                }
+
+                fn counts_per_v(&self) -> i32 {
+                    self.registers.info().read().counts_per_mv().bits() as i32 * 1000
                 }
             }
         )+

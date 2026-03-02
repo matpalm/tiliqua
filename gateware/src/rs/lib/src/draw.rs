@@ -380,7 +380,7 @@ where
     Ok(())
 }
 
-pub fn draw_cal<D>(d: &mut D, x: u32, y: u32, hue: u8, dac: &[i16; 4], adc: &[i16; 4]) -> Result<(), D::Error>
+pub fn draw_cal<D>(d: &mut D, x: u32, y: u32, hue: u8, dac: &[i32; 4], adc: &[i32; 4], counts_per_v: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = HI8>,
 {
@@ -411,14 +411,15 @@ where
         line(d, 0, ch*spacing+s_y/2, 0, s_y+ch*spacing, false);
         line(d, width, ch*spacing+s_y/2, width, s_y+ch*spacing, false);
         line(d, width/2, ch*spacing+s_y-spacing/2, width/2, s_y+ch*spacing, false);
-        let delta = (adc[ch as usize] - dac[ch as usize]) / 4;
-        if delta.abs() < (width/2) as i16 {
-            let pos = (delta + (width/2) as i16) as u32;
+        let counts_per_mv = counts_per_v / 1000;
+        let delta = (adc[ch as usize] - dac[ch as usize]) / counts_per_mv;
+        if delta.abs() < (width/2) as i32 {
+            let pos = (delta + (width/2) as i32) as u32;
             line(d, pos, ch*spacing+s_y-spacing/4, pos, s_y+ch*spacing, true);
         }
 
         let mut adc_text: String<8> = String::new();
-        write!(adc_text, "{}", adc[ch as usize]/4).ok();
+        write!(adc_text, "{}", adc[ch as usize]/counts_per_mv).ok();
         Text::with_alignment(
             &adc_text,
             Point::new((x-10) as i32, (y+(ch+1)*spacing-3) as i32),
@@ -427,7 +428,7 @@ where
         ).draw(d)?;
 
         let mut dac_text: String<8> = String::new();
-        write!(dac_text, "{}", dac[ch as usize]/4).ok();
+        write!(dac_text, "{}", dac[ch as usize]/counts_per_mv).ok();
         Text::with_alignment(
             &dac_text,
             Point::new((x+width+10) as i32, (y+(ch+1)*spacing-3) as i32),
@@ -458,7 +459,8 @@ pub fn draw_cal_constants<D>(
     adc_scale: &[i32; 4],
     adc_zero:  &[i32; 4],
     dac_scale: &[i32; 4],
-    dac_zero:  &[i32; 4]
+    dac_zero:  &[i32; 4],
+    f_bits: u8,
     ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = HI8>,
@@ -467,14 +469,15 @@ where
 
     let spacing = 30;
     let width   = 256;
+    let divisor = (1u32 << f_bits) as f32;
 
     for ch in 0..4 {
         let mut s: String<32> = String::new();
         write!(s, "O{} = {:.4} * o{} + {:.4}",
               ch,
-              dac_scale[ch as usize] as f32 / 32768f32,
+              dac_scale[ch as usize] as f32 / divisor,
               ch,
-              dac_zero[ch as usize] as f32 / 32768f32).ok();
+              dac_zero[ch as usize] as f32 / divisor).ok();
         Text::with_alignment(
             &s,
             Point::new((x+width/2+20) as i32, (y+(ch+1)*spacing-3) as i32),
@@ -487,9 +490,9 @@ where
         let mut s: String<32> = String::new();
         write!(s, "i{} = {:.4} * I{} + {:.4}",
               ch,
-              adc_scale[ch as usize] as f32 / 32768f32,
+              adc_scale[ch as usize] as f32 / divisor,
               ch,
-              adc_zero[ch as usize] as f32 / 32768f32).ok();
+              adc_zero[ch as usize] as f32 / divisor).ok();
         Text::with_alignment(
             &s,
             Point::new((x+width/2-20) as i32, (y+(ch+1)*spacing-3) as i32),
@@ -1149,13 +1152,13 @@ mod tests {
 
         draw_cal(&mut disp, H_ACTIVE/2-128, V_ACTIVE/2-128, 0,
                  &[4096, 4096, 4096, 4096],
-                 &[4000, 4120, 4090, 4000]).ok();
+                 &[4000, 4120, 4090, 4000], 4000).ok();
         draw_cal_constants(&mut disp, H_ACTIVE/2-128, V_ACTIVE/2+64, 0,
                  &[4096, 4096, 4096, 4096],
                  &[4000, 4120, 4090, 4000],
                  &[4096, 4096, 4096, 4096],
-                 &[4000, 4120, 4090, 4000]
-                 ).ok();
+                 &[4000, 4120, 4090, 4000],
+                 15).ok();
 
         disp.img.save("draw_cal.png").unwrap();
     }

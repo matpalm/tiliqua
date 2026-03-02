@@ -90,25 +90,27 @@ impl CalibrationConstants {
     where
         Pmod: EurorackPmod
     {
-        let shift = if self.cal.fractional_bits != pmod.f_bits() {
-            info!("audio/calibration: calibration (f_bits={}) != hardware (f_bits={}), scaling to match...",
-                 self.cal.fractional_bits, pmod.f_bits());
-            pmod.f_bits() - self.cal.fractional_bits
-        } else {
-            // Calibration matches hardware, no shift needed.
-            0
+        let hw_f_bits = pmod.f_bits() as i8;
+        let cal_f_bits = self.cal.fractional_bits as i8;
+        let shift = hw_f_bits - cal_f_bits;
+        if shift != 0 {
+            info!("audio/calibration: calibration (f_bits={}) != hardware (f_bits={}), shift={}",
+                 cal_f_bits, hw_f_bits, shift);
+        }
+        let rescale = |v: i32| -> i32 {
+            if shift > 0 { v << shift } else { v >> (-shift) }
         };
 
         for ch in 0..4usize {
             pmod.write_calibration_constant(
                 ch as u8,
-                self.cal.adc_scale[ch]<<shift,
-                self.cal.adc_zero[ch]<<shift,
+                rescale(self.cal.adc_scale[ch]),
+                rescale(self.cal.adc_zero[ch]),
             );
             pmod.write_calibration_constant(
                 (ch+4) as u8,
-                self.cal.dac_scale[ch]<<shift,
-                self.cal.dac_zero[ch]<<shift,
+                rescale(self.cal.dac_scale[ch]),
+                rescale(self.cal.dac_zero[ch]),
             );
         }
     }

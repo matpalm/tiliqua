@@ -79,7 +79,7 @@ from tiliqua import dsp
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ
-from tiliqua.raster import scope
+from tiliqua.raster import PSQ, scope
 from tiliqua.raster.plot import FramebufferPlotter
 from tiliqua.tiliqua_soc import TiliquaSoc
 from vendor.vexiiriscv import VexiiRiscv
@@ -257,22 +257,22 @@ class MacroOscSoc(TiliquaSoc):
         # Extra FIFO between audio out stream and plotting components
         # This FIFO does not block the audio stream.
 
-        m.submodules.plot_fifo = plot_fifo = fifo.SyncFIFOBuffered(
-            width=data.ArrayLayout(ASQ, 2).as_shape().width, depth=32)
+        m.submodules.plot_fifo = plot_fifo = dsp.SyncFIFOBuffered(
+            shape=data.ArrayLayout(PSQ, 2), depth=32)
 
         # Route audio outputs 2/3 to plotting stream (scope / vector)
         m.d.comb += [
-            plot_fifo.w_stream.valid.eq(self.audio_fifo.stream.valid & pmod0.i_cal.ready),
-            plot_fifo.w_stream.payload[0:16] .eq(self.audio_fifo.stream.payload[2]),
-            plot_fifo.w_stream.payload[16:32].eq(self.audio_fifo.stream.payload[3]),
+            plot_fifo.i.valid.eq(self.audio_fifo.stream.valid & pmod0.i_cal.ready),
+            plot_fifo.i.payload[0].eq(self.audio_fifo.stream.payload[2]),
+            plot_fifo.i.payload[1].eq(self.audio_fifo.stream.payload[3]),
         ]
 
         # Upsample before scope/vector
         fs = self.clock_settings.audio_clock.fs()
-        m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2, source=plot_fifo.r_stream)
-        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
+        m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2, source=plot_fifo.o, shape=PSQ)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4, shape=PSQ)
         for ch in range(2):
-            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1)
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1, shape=PSQ)
             setattr(m.submodules, f"resample{ch}", r)
             wiring.connect(m, up_split2.o[ch], r.i)
             wiring.connect(m, r.o, up_merge4.i[ch])

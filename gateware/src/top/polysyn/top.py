@@ -83,7 +83,7 @@ from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ
-from tiliqua.raster import scope
+from tiliqua.raster import PSQ, scope
 from tiliqua.raster.plot import FramebufferPlotter
 from tiliqua.tiliqua_soc import TiliquaSoc
 
@@ -494,10 +494,10 @@ class PolySoc(TiliquaSoc):
 
         # Upsample channels 0/1 before vectorscope
         fs = self.clock_settings.audio_clock.fs()
-        m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2)
-        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
+        m.submodules.up_split2 = up_split2 = dsp.Split(n_channels=2, shape=PSQ)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4, shape=PSQ)
         for ch in range(2):
-            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1)
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1, shape=PSQ)
             setattr(m.submodules, f"resample{ch}", r)
             wiring.connect(m, up_split2.o[ch], r.i)
             wiring.connect(m, r.o, up_merge4.i[ch])

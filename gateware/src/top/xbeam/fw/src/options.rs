@@ -91,11 +91,11 @@ pub struct HelpOpts {
 pub struct VectorOpts {
     #[option(0)]
     pub x_offset: IntOption<PosParams>,
-    #[option(VScale::Scale1V)]
+    #[option(VScale::Scale2V)]
     pub x_scale: EnumOption<VScale>,
     #[option(0)]
     pub y_offset: IntOption<PosParams>,
-    #[option(VScale::Scale1V)]
+    #[option(VScale::Scale2V)]
     pub y_scale: EnumOption<VScale>,
     #[option(4)]
     pub i_offset: IntOption<IntensityParams>,
@@ -131,7 +131,7 @@ pub struct BeamOpts {
     pub palette: EnumOption<ColorPalette>,
     #[option]
     pub grid: EnumOption<GridOverlay>,
-    #[option(2)]
+    #[option(4)]
     pub grid_i: IntOption<IntensityParams>,
 }
 

@@ -93,7 +93,7 @@ import os
 import sys
 
 from amaranth import *
-from amaranth.lib import data, fifo, stream, wiring
+from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out, connect, flipped
 from amaranth_soc import csr
 
@@ -103,7 +103,7 @@ from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.periph import eurorack_pmod
 from tiliqua.periph import overlay
-from tiliqua.raster import scope
+from tiliqua.raster import PSQ, scope
 from tiliqua.raster.plot import FramebufferPlotter
 from tiliqua.tiliqua_soc import TiliquaSoc
 
@@ -207,7 +207,7 @@ class XbeamSoc(TiliquaSoc):
             bus_signature=self.psram_periph.bus.signature.flip(), n_ports=5)
         self.psram_periph.add_master(self.plotter.bus)
 
-        self.n_upsample = 8
+        self.n_upsample = 8 if self.clock_settings.audio_clock.is_192khz() else 32
 
         # Vectorscope with CSR registers
         self.vector_periph = scope.VectorPeripheral()
@@ -271,20 +271,20 @@ class XbeamSoc(TiliquaSoc):
 
         wiring.connect(m, self.xbeam_periph.delay_o, pmod0.i_cal)
 
-        m.submodules.plot_fifo = plot_fifo = fifo.SyncFIFOBuffered(
-            width=data.ArrayLayout(eurorack_pmod.ASQ, 4).as_shape().width, depth=256)
+        m.submodules.plot_fifo = plot_fifo = dsp.SyncFIFOBuffered(
+            shape=data.ArrayLayout(PSQ, 4), depth=256)
 
         with m.If(self.xbeam_periph.show_outputs):
-            dsp.connect_peek(m, pmod0.i_cal, plot_fifo.w_stream)
+            dsp.connect_peek(m, pmod0.i_cal, plot_fifo.i)
         with m.Else():
-            dsp.connect_peek(m, pmod0.o_cal, plot_fifo.w_stream)
+            dsp.connect_peek(m, pmod0.o_cal, plot_fifo.i)
 
         # Upsample all 4 channels before routing to scope/vector peripherals
         fs = self.clock_settings.audio_clock.fs()
-        m.submodules.up_split4 = up_split4 = dsp.Split(n_channels=4, source=plot_fifo.r_stream)
-        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
+        m.submodules.up_split4 = up_split4 = dsp.Split(n_channels=4, source=plot_fifo.o, shape=PSQ)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4, shape=PSQ)
         for ch in range(4):
-            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1)
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1, shape=PSQ)
             setattr(m.submodules, f"resample{ch}", r)
             wiring.connect(m, up_split4.o[ch], r.i)
             wiring.connect(m, r.o, up_merge4.i[ch])

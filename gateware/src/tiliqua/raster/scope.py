@@ -16,6 +16,7 @@ from amaranth_future import fixed
 
 from .. import dsp
 from ..dsp import ASQ
+from . import PSQ, PSQ_BASE_FBITS, psq_from_volts
 from .plot import PlotRequest
 from .stroke import Stroke
 
@@ -60,7 +61,7 @@ class VectorPeripheral(wiring.Component):
         self._bridge = csr.Bridge(regs.as_memory_map())
 
         super().__init__({
-            "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
+            "i": In(stream.Signature(data.ArrayLayout(PSQ, 4))),
             # CSR bus
             "bus": In(csr.Signature(addr_width=regs.addr_width, data_width=regs.data_width)),
             # Plot request output to shared backend
@@ -78,7 +79,7 @@ class VectorPeripheral(wiring.Component):
         wiring.connect(m, wiring.flipped(self.bus), self._bridge.bus)
 
         m.d.comb += self._pixels_per_volt.f.pixels_per_volt.r_data.eq(
-            dsp.asq_from_volts(1) >> dsp.ASQ_EXTRA_FBITS)
+            psq_from_volts(1).reshape(PSQ_BASE_FBITS))
 
         with m.If(self._hue.f.hue.w_stb):
             m.d.sync += self.stroke.hue.eq(self._hue.f.hue.w_data)
@@ -171,7 +172,7 @@ class ScopePeripheral(wiring.Component):
 
         self._bridge = csr.Bridge(regs.as_memory_map())
         super().__init__({
-            "i": In(stream.Signature(data.ArrayLayout(ASQ, self.n_channels))),
+            "i": In(stream.Signature(data.ArrayLayout(PSQ, self.n_channels))),
             # CSR bus
             "bus": In(csr.Signature(addr_width=regs.addr_width, data_width=regs.data_width)),
             # Pixel request outputs, one for each channel
@@ -183,10 +184,10 @@ class ScopePeripheral(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        trigger_lvl = Signal(shape=dsp.ASQ)
+        trigger_lvl = Signal(shape=PSQ)
         trigger_always = Signal()
 
-        self.isplit4 = dsp.Split(self.n_channels)
+        self.isplit4 = dsp.Split(self.n_channels, shape=PSQ)
 
         wiring.connect(m, wiring.flipped(self.i), self.isplit4.i)
 
@@ -194,7 +195,7 @@ class ScopePeripheral(wiring.Component):
         wiring.connect(m, wiring.flipped(self.bus), self._bridge.bus)
 
         m.d.comb += self._pixels_per_volt.f.pixels_per_volt.r_data.eq(
-            dsp.asq_from_volts(1) >> dsp.ASQ_EXTRA_FBITS)
+            psq_from_volts(1).reshape(PSQ_BASE_FBITS))
         m.d.comb += self._fs.f.fs.r_data.eq(self.fs)
 
         m.submodules += self.strokes
@@ -207,11 +208,11 @@ class ScopePeripheral(wiring.Component):
         m.submodules.isplit4 = self.isplit4
 
         # 2 copies of input channel 0
-        m.submodules.irep2 = irep2 = dsp.Split(2, replicate=True, source=self.isplit4.o[0])
+        m.submodules.irep2 = irep2 = dsp.Split(2, replicate=True, source=self.isplit4.o[0], shape=PSQ)
 
         # Send one copy to trigger => ramp => X
-        m.submodules.trig = trig = dsp.Trigger()
-        m.submodules.ramp = ramp = dsp.Ramp()
+        m.submodules.trig = trig = dsp.Trigger(shape=PSQ)
+        m.submodules.ramp = ramp = dsp.Ramp(shape=PSQ)
         timebase = Signal(shape=dsp.Ramp.TIMEBASE_SQ)
         # Audio => Trigger
         dsp.connect_remap(m, irep2.o[0], trig.i, lambda o, i: [
@@ -225,10 +226,10 @@ class ScopePeripheral(wiring.Component):
         ])
 
         # Split ramp into 4 streams, one for each channel
-        m.submodules.rampsplit4 = rampsplit4 = dsp.Split(self.n_channels, replicate=True, source=ramp.o)
+        m.submodules.rampsplit4 = rampsplit4 = dsp.Split(self.n_channels, replicate=True, source=ramp.o, shape=PSQ)
 
         # Rasterize ch0: Ramp => X, Audio => Y
-        m.submodules.ch0_merge4 = ch0_merge4 = dsp.Merge(4)
+        m.submodules.ch0_merge4 = ch0_merge4 = dsp.Merge(4, shape=PSQ)
         # HACK for stable trigger despite periodic cache misses
         # TODO: modify ramp generation instead?
         dsp.connect_peek(m, ch0_merge4.o, self.strokes[0].i, always_ready=True)
@@ -238,7 +239,7 @@ class ScopePeripheral(wiring.Component):
 
         # Rasterize ch1-ch3: Ramp => X, Audio => Y
         for ch in range(1, self.n_channels):
-            ch_merge4 = dsp.Merge(4)
+            ch_merge4 = dsp.Merge(4, shape=PSQ)
             dsp.connect_peek(m, ch_merge4.o, self.strokes[ch].i, always_ready=True)
             m.submodules += ch_merge4
             ch_merge4.wire_valid(m, [2, 3])
@@ -270,7 +271,8 @@ class ScopePeripheral(wiring.Component):
                 m.d.sync += s.scale_y.eq(self._yscale.f.yscale.w_data)
 
         with m.If(self._trigger_lvl.f.trigger_level.w_stb):
-            m.d.sync += trigger_lvl.as_value().eq(self._trigger_lvl.f.trigger_level.w_data<<dsp.ASQ_EXTRA_FBITS)
+            m.d.sync += trigger_lvl.as_value().eq(
+                self._trigger_lvl.f.trigger_level.w_data.as_signed() >> (PSQ_BASE_FBITS - PSQ.f_bits))
 
         with m.If(self._xpos.f.xpos.w_stb):
             for s in self.strokes:

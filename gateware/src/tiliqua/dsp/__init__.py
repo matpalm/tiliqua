@@ -12,14 +12,10 @@ from amaranth_future import fixed
 
 # Native 'Audio sample SQ': shape of audio samples from CODEC.
 # Signed fixed point, where -1 to +1 represents -8.192V to +8.192V.
-ASQ = fixed.SQ(1, int(os.environ.get('TILIQUA_ASQ_WIDTH', '16')) - 1)
+_ASQ_WIDTH = int(os.environ.get('TILIQUA_ASQ_WIDTH', '16'))
+_ASQ_I_BITS = int(os.environ.get('TILIQUA_ASQ_I_BITS', '1'))
+ASQ = fixed.SQ(_ASQ_I_BITS, _ASQ_WIDTH - _ASQ_I_BITS)
 
-# Fractiona bits beyond 15-bit default used for pixel coordinate mapping.
-# Basically the whole scope subsystem was brought up with good scaling
-# assuming 16-bit samples for fixed-point to pixel-deflection mapping.
-# This constant is used in some places to ensure deflection looks similar
-# even if we introduce more fractional bits.
-ASQ_EXTRA_FBITS = ASQ.f_bits - 15
 
 def asq_from_volts(volts):
     """Convert a voltage to a ``fixed.Const`` of shape ``ASQ`` (4 counts/mV)."""

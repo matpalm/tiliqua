@@ -38,7 +38,7 @@ from tiliqua.build.sim import FakeTiliquaDomainGenerator
 from tiliqua.dsp import ASQ
 from tiliqua.periph import eurorack_pmod, psram
 from tiliqua.platform import *
-from tiliqua.raster import scope
+from tiliqua.raster import PSQ, scope
 from tiliqua.raster.persist import Persistance
 from tiliqua.raster.plot import FramebufferPlotter
 from tiliqua.video import framebuffer, palette
@@ -130,10 +130,10 @@ class VectorScopeTop(Elaboratable):
 
         # Upsample all 4 channels before vectorscope
         fs = self.clock_settings.audio_clock.fs()
-        m.submodules.up_split4 = up_split4 = dsp.Split(n_channels=4)
-        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4)
+        m.submodules.up_split4 = up_split4 = dsp.Split(n_channels=4, shape=PSQ)
+        m.submodules.up_merge4 = up_merge4 = dsp.Merge(n_channels=4, shape=PSQ)
         for ch in range(4):
-            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1)
+            r = dsp.Resample(fs_in=fs, n_up=self.n_upsample, m_down=1, shape=PSQ)
             setattr(m.submodules, f"resample{ch}", r)
             wiring.connect(m, up_split4.o[ch], r.i)
             wiring.connect(m, r.o, up_merge4.i[ch])
@@ -142,9 +142,11 @@ class VectorScopeTop(Elaboratable):
         if self.spectrogram:
             m.submodules.spectro = self.spectro
             wiring.connect(m, self.pmod0.o_cal, self.spectro.i)
-            wiring.connect(m, self.spectro.o, up_split4.i)
+            dsp.connect_remap(m, self.spectro.o, up_split4.i, lambda o, i: [
+                i.payload[ch].eq(o.payload[ch]) for ch in range(4)])
         else:
-            wiring.connect(m, self.pmod0.o_cal, up_split4.i)
+            dsp.connect_remap(m, self.pmod0.o_cal, up_split4.i, lambda o, i: [
+                i.payload[ch].eq(o.payload[ch]) for ch in range(4)])
 
         # Connect vector peripheral to plotter
         wiring.connect(m, self.vector_periph.o, self.fb_plot.i[0])

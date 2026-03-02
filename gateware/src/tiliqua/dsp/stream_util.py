@@ -291,8 +291,13 @@ def connect_peek(m, stream_peek, stream_dst, always_ready=False):
     Nonblocking 'peek', used to tap off an EXISTING stream connection, without
     influencing it, for inspection / plotting purposes.
     """
-    m.d.comb += [
+    src = stream_peek.payload
+    dst = stream_dst.payload
+    if isinstance(src.shape(), data.ArrayLayout) and isinstance(dst.shape(), data.ArrayLayout):
+        payload_stmts = [dst[i].eq(src[i]) for i in range(src.shape().length)]
+    else:
+        payload_stmts = [dst.eq(src)]
+    m.d.comb += payload_stmts + [
         stream_dst.valid.eq(stream_peek.valid & stream_peek.ready),
-        stream_dst.payload.eq(stream_peek.payload),
         stream_peek.ready.eq(1) if always_ready else []
     ]

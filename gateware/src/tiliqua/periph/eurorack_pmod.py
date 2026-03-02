@@ -280,8 +280,8 @@ class I2SCalibrator(wiring.Component):
     # Set values and assert `valid` until `ready` is strobed by this core, which
     # indicates the calibration memory write has been committed.
     cal_mem_write: In(stream.Signature(data.StructLayout({
-        "a": signed(2 + ASQ.width),
-        "b": signed(2 + ASQ.width),
+        "a": signed(3 + ASQ.f_bits),
+        "b": signed(3 + ASQ.f_bits),
         "channel": unsigned(exact_log2(I2STDM.N_CHANNELS*2))
         })))
 
@@ -355,7 +355,7 @@ class I2SCalibrator(wiring.Component):
                 with m.If(self.strobe):
                     m.d.audio += [
                         cal_read.addr.eq(self.channel),
-                        in_sample.as_value().eq(self.i_uncal)
+                        in_sample.as_value().eq(self.i_uncal>>(ASQ.i_bits-1))
                     ]
                     with m.If(dac_fifo.r_rdy):
                         with m.If(self.channel == (I2STDM.N_CHANNELS - 1)):
@@ -380,7 +380,7 @@ class I2SCalibrator(wiring.Component):
                 ]
                 m.next = "PROCESS_DAC"
             with m.State("PROCESS_DAC"):
-                m.d.audio += self.o_uncal.eq(out_sample.as_value())
+                m.d.audio += self.o_uncal.eq((out_sample<<(ASQ.i_bits-1)).saturate(ASQ).as_value())
                 m.next = "IDLE"
 
         #
@@ -898,12 +898,12 @@ class EurorackPmod(wiring.Component):
             with m.If(self.led_mode[n]):
                 if n <= 3:
                     with m.If(self.jack[n]):
-                        m.d.sync += i2c_master.led[n].eq(self.calibrator.o_cal_peek[n].as_value()>>8),
+                        m.d.sync += i2c_master.led[n].eq(self.calibrator.o_cal_peek[n].as_value()[ASQ.width-8:]),
                     with m.Else():
                         m.d.sync += i2c_master.led[n].eq(0),
                 else:
                     with m.If(self.i_cal.valid):
-                        m.d.sync += i2c_master.led[n].eq(self.i_cal.payload[n-4].as_value()>>8),
+                        m.d.sync += i2c_master.led[n].eq(self.i_cal.payload[n-4].as_value()[ASQ.width-8:]),
             with m.Else():
                 m.d.sync += i2c_master.led[n].eq(self.led[n]),
 

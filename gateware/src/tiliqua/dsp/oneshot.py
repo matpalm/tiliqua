@@ -19,17 +19,21 @@ class Trigger(wiring.Component):
     Currently this only implements rising edge trigger.
     """
 
-    i: In(stream.Signature(data.StructLayout({
-            "sample":    ASQ,
-            "threshold": ASQ,
-        })))
-    o: Out(stream.Signature(unsigned(1)))
+    def __init__(self, shape=ASQ):
+        self.shape = shape
+        super().__init__({
+            "i": In(stream.Signature(data.StructLayout({
+                "sample":    shape,
+                "threshold": shape,
+            }))),
+            "o": Out(stream.Signature(unsigned(1))),
+        })
 
     def elaborate(self, platform):
         m = Module()
 
         trigger = Signal()
-        l_sample = Signal(shape=ASQ)
+        l_sample = Signal(shape=self.shape)
 
         m.d.comb += [
             self.o.valid.eq(self.i.valid),
@@ -57,15 +61,16 @@ class Ramp(wiring.Component):
 
     TIMEBASE_SQ = fixed.SQ(8, 24)
 
-    i: In(stream.Signature(data.StructLayout({
-            "trigger":  unsigned(1),
-            "td":       TIMEBASE_SQ, # time delta
-        })))
-    o: Out(stream.Signature(ASQ))
-
-    def __init__(self, shift=6):
+    def __init__(self, shape=ASQ, shift=6):
+        self.shape = shape
         self.shift = shift
-        super().__init__()
+        super().__init__({
+            "i": In(stream.Signature(data.StructLayout({
+                "trigger":  unsigned(1),
+                "td":       self.TIMEBASE_SQ, # time delta
+            }))),
+            "o": Out(stream.Signature(shape)),
+        })
 
     def elaborate(self, platform):
         m = Module()
@@ -79,9 +84,9 @@ class Ramp(wiring.Component):
         ]
 
         with m.If(self.i.valid & self.o.ready):
-            with m.If(self.o.payload > fixed.Const(0.985, shape=ASQ)):
+            with m.If(self.o.payload > fixed.Const(0.985, shape=self.shape)):
                 with m.If(self.i.payload.trigger):
-                    m.d.sync += s.eq(ASQ.min() << self.shift)
+                    m.d.sync += s.eq(self.shape.min() << self.shift)
             with m.Else():
                 m.d.sync += s.eq(s + self.i.payload.td)
 

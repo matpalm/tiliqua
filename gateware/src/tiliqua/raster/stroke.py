@@ -7,8 +7,7 @@ from amaranth.build import *
 from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
 
-from .. import dsp
-from ..dsp import ASQ
+from . import PSQ, PSQ_BASE_FBITS
 from ..video.framebuffer import DMAFramebuffer
 from .plot import BlendMode, OffsetMode, PlotRequest
 
@@ -39,7 +38,7 @@ class Stroke(wiring.Component):
         super().__init__({
             # Point stream to render
             # 4 channels: x, y, intensity, color
-            "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
+            "i": In(stream.Signature(data.ArrayLayout(PSQ, 4))),
             # Plot request output to shared backend
             "o": Out(stream.Signature(PlotRequest)),
         })
@@ -86,11 +85,11 @@ class Stroke(wiring.Component):
                 # Fired on every audio sample fs_strobe
                 with m.If(self.point_stream.valid):
                     m.d.sync += [
-                        sample_x.eq((self.point_stream.payload[0].as_value()>>(self.scale_x+dsp.ASQ_EXTRA_FBITS)) + self.x_offset),
+                        sample_x.eq((self.point_stream.payload[0].reshape(PSQ_BASE_FBITS).as_value()>>self.scale_x) + self.x_offset),
                         # invert sample_y for positive scope -> up
-                        sample_y.eq((-self.point_stream.payload[1].as_value()>>(self.scale_y+dsp.ASQ_EXTRA_FBITS)) + self.y_offset),
-                        sample_p.eq(Mux(self.scale_p != 0xf, self.point_stream.payload[2].as_value()>>(self.scale_p+dsp.ASQ_EXTRA_FBITS), 0)),
-                        sample_c.eq(Mux(self.scale_c != 0xf, self.point_stream.payload[3].as_value()>>(self.scale_c+dsp.ASQ_EXTRA_FBITS), 0)),
+                        sample_y.eq((-self.point_stream.payload[1].reshape(PSQ_BASE_FBITS).as_value()>>self.scale_y) + self.y_offset),
+                        sample_p.eq(Mux(self.scale_p != 0xf, self.point_stream.payload[2].reshape(PSQ_BASE_FBITS).as_value()>>self.scale_p, 0)),
+                        sample_c.eq(Mux(self.scale_c != 0xf, self.point_stream.payload[3].reshape(PSQ_BASE_FBITS).as_value()>>self.scale_c, 0)),
                     ]
                     m.next = 'SEND_PIXEL'
 

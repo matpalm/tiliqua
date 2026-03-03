@@ -214,6 +214,7 @@ class MidiVoiceTracker(wiring.Component):
         self.zero_velocity_gate = zero_velocity_gate
         super().__init__({
             "i": In(stream.Signature(MidiMessage)),
+            "voice_active": In(data.ArrayLayout(unsigned(1), max_voices)),
             "o": Out(MidiVoice).array(max_voices),
         });
 
@@ -270,7 +271,7 @@ class MidiVoiceTracker(wiring.Component):
                                 m.next = 'NOTE-OFF'
                             with m.Else():
                                 m.d.sync += voice_ix_write.eq(0)
-                                m.next = 'NOTE-ON-SELECT'
+                                m.next = 'NOTE-ON-MATCH'
                         with m.Case(MessageType.NOTE_OFF):
                             m.next = 'NOTE-OFF'
                         with m.Case(MessageType.CONTROL_CHANGE):
@@ -281,6 +282,38 @@ class MidiVoiceTracker(wiring.Component):
                             m.next = 'POLY-PRESSURE'
                         with m.Default():
                             m.next = 'WAIT-VALID'
+
+            with m.State('NOTE-ON-MATCH'):
+                # prefer reusing a voice slot that already holds the same note,
+                # so the ADSR retrigger lands on the correct envelope state.
+                match_found = Signal()
+                with m.Switch(voice_ix_write):
+                    for n in range(self.max_voices):
+                        with m.Case(n):
+                            m.d.comb += match_found.eq(
+                                self.o[n].note == msg.midi_payload.note_on.note)
+                with m.If(match_found):
+                    m.next = 'NOTE-ON-COMMIT'
+                with m.Elif(voice_ix_write == self.max_voices - 1):
+                    m.d.sync += voice_ix_write.eq(0)
+                    m.next = 'NOTE-ON-SELECT-IDLE'
+                with m.Else():
+                    m.d.sync += voice_ix_write.eq(voice_ix_write + 1)
+
+            with m.State('NOTE-ON-SELECT-IDLE'):
+                # prefer a free slot whose ADSR has fully decayed
+                slot_active = Signal()
+                with m.Switch(voice_ix_write):
+                    for n in range(self.max_voices):
+                        with m.Case(n):
+                            m.d.comb += slot_active.eq(self.voice_active[n])
+                with m.If(~voice_mask.bit_select(voice_ix_write, 1) & ~slot_active):
+                    m.next = 'NOTE-ON-COMMIT'
+                with m.Elif(voice_ix_write == self.max_voices - 1):
+                    m.d.sync += voice_ix_write.eq(0)
+                    m.next = 'NOTE-ON-SELECT'
+                with m.Else():
+                    m.d.sync += voice_ix_write.eq(voice_ix_write + 1)
 
             with m.State('NOTE-ON-SELECT'):
                 # find an empty note slot to write to

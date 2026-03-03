@@ -101,7 +101,7 @@ class MidiTests(unittest.TestCase):
                             if dut.zero_velocity_gate:
                                 self.assertEqual(vel_in_slot,  0x0)
                             else:
-                                self.assertEqual(vel_in_slot,  0x30)
+                                self.assertEqual(vel_in_slot,  0x60)
                 await ctx.tick()
 
         sim = Simulator(dut)

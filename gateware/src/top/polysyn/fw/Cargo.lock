@@ -621,6 +621,7 @@ dependencies = [
  "tiliqua-hal",
  "tiliqua-lib",
  "tiliqua-pac",
+ "trig-const",
 ]
 
 [[package]]
@@ -685,6 +686,12 @@ dependencies = [
  "riscv",
  "vcell",
 ]
+
+[[package]]
+name = "trig-const"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffec2fe2ed1e10dac46d8530afb395cae635fa02ef03d7fff1c211e94f9059fc"
 
 [[package]]
 name = "typenum"

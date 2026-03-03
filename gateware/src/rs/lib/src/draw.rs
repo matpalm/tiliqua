@@ -176,6 +176,132 @@ where
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum AdsrPhase {
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+}
+
+pub fn draw_adsr<D>(d: &mut D, x: u32, y: u32, width: u32, height: u32,
+                    attack: u16, decay: u16, sustain: u16, release: u16,
+                    hue: u8, highlight: Option<AdsrPhase>) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = HI8>,
+{
+    let font_dim = MonoTextStyle::new(&FONT_9X15, HI8::new(hue, 10));
+    let font_bright = MonoTextStyle::new(&FONT_9X15_BOLD, HI8::new(hue, 15));
+
+    // Convert UI values (0..32768) to milliseconds (1..2000)
+    let a_ms = 1.0f32 + (attack as f32 / 32768.0f32) * 1999.0f32;
+    let d_ms = 1.0f32 + (decay as f32 / 32768.0f32) * 1999.0f32;
+    let s_ms = 1000.0f32; // fixed sustain section
+    let r_ms = 1.0f32 + (release as f32 / 32768.0f32) * 1999.0f32;
+
+    let total_ms = a_ms + d_ms + s_ms + r_ms;
+    let w = width as f32;
+
+    let a_w = (a_ms / total_ms * w) as i32;
+    let d_w = (d_ms / total_ms * w) as i32;
+    let s_w = (s_ms / total_ms * w) as i32;
+    let r_w = width as i32 - a_w - d_w - s_w; // remainder avoids rounding gaps
+
+    let s_level = (sustain as u32 * height / 32768) as i32;
+    let h = height as i32;
+    let x = x as i32;
+    let y = y as i32;
+
+    // Envelope vertices
+    let p0 = Point::new(x, y + h);
+    let p1 = Point::new(x + a_w, y);
+    let p2 = Point::new(x + a_w + d_w, y + h - s_level);
+    let p3 = Point::new(x + a_w + d_w + s_w, y + h - s_level);
+    let p4 = Point::new(x + a_w + d_w + s_w + r_w, y + h);
+
+    let stroke = PrimitiveStyleBuilder::new()
+        .stroke_color(HI8::new(hue, 15))
+        .stroke_width(1)
+        .build();
+
+    let stroke_dim = PrimitiveStyleBuilder::new()
+        .stroke_color(HI8::new(hue, 6))
+        .stroke_width(1)
+        .build();
+
+    // Baseline
+    Line::new(Point::new(x, y + h), Point::new(x + width as i32, y + h))
+        .into_styled(stroke_dim).draw(d)?;
+
+    // Section separators
+    for sep_x in [p1.x, p2.x, p3.x] {
+        Line::new(Point::new(sep_x, y), Point::new(sep_x, y + h))
+            .into_styled(stroke_dim).draw(d)?;
+    }
+
+    // Envelope lines
+    Line::new(p0, p1).into_styled(stroke).draw(d)?;
+    Line::new(p1, p2).into_styled(stroke).draw(d)?;
+    Line::new(p2, p3).into_styled(stroke).draw(d)?;
+    Line::new(p3, p4).into_styled(stroke).draw(d)?;
+
+    // Section labels
+    let label_y = y + h + 14;
+    let font = |phase| if highlight == Some(phase) { font_bright } else { font_dim };
+    Text::with_alignment("A", Point::new(x + a_w / 2, label_y),
+        font(AdsrPhase::Attack), Alignment::Center).draw(d)?;
+    Text::with_alignment("D", Point::new(x + a_w + d_w / 2, label_y),
+        font(AdsrPhase::Decay), Alignment::Center).draw(d)?;
+    Text::with_alignment("S", Point::new(x + a_w + d_w + s_w / 2, label_y),
+        font(AdsrPhase::Sustain), Alignment::Center).draw(d)?;
+    Text::with_alignment("R", Point::new(x + a_w + d_w + s_w + r_w / 2, label_y),
+        font(AdsrPhase::Release), Alignment::Center).draw(d)?;
+
+    Ok(())
+}
+
+pub fn draw_waveform_preview<D>(d: &mut D, x: u32, y: u32, width: u32, height: u32,
+                                hue: u8, samples: &[i16]) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = HI8>,
+{
+    let stroke = PrimitiveStyleBuilder::new()
+        .stroke_color(HI8::new(hue, 15))
+        .stroke_width(1)
+        .build();
+
+    let stroke_dim = PrimitiveStyleBuilder::new()
+        .stroke_color(HI8::new(hue, 6))
+        .stroke_width(1)
+        .build();
+
+    let h = height as i32;
+    let half_h = h / 2;
+    let x = x as i32;
+    let y = y as i32;
+    let center_y = y + half_h;
+
+    // Baseline
+    Line::new(Point::new(x, center_y), Point::new(x + width as i32, center_y))
+        .into_styled(stroke_dim).draw(d)?;
+
+    let n = samples.len();
+    if n < 2 {
+        return Ok(());
+    }
+
+    for i in 1..n {
+        let x0 = x + (i - 1) as i32 * width as i32 / (n - 1) as i32;
+        let x1 = x + i as i32 * width as i32 / (n - 1) as i32;
+        let y0 = center_y - (samples[i - 1] as i32 * half_h / 32767);
+        let y1 = center_y - (samples[i] as i32 * half_h / 32767);
+        Line::new(Point::new(x0, y0), Point::new(x1, y1))
+            .into_styled(stroke).draw(d)?;
+    }
+
+    Ok(())
+}
+
 pub fn draw_boot_logo<D>(d: &mut D, sx: i32, sy: i32, ix: u32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = HI8>,

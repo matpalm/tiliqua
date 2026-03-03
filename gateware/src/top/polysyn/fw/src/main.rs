@@ -21,6 +21,7 @@ use pac::constants::*;
 use tiliqua_hal::persist::Persist;
 use tiliqua_fw::*;
 use tiliqua_fw::options::*;
+use opts::Options;
 use tiliqua_hal::pmod::EurorackPmod;
 
 use tiliqua_hal::embedded_graphics::prelude::*;
@@ -29,7 +30,16 @@ use opts::persistence::*;
 use hal::pca9635::Pca9635Driver;
 use hal::tusb322::{TUSB322Driver, TUSB322Mode, AttachedState};
 
+use tiliqua_fw::wavetable;
+
 pub const TIMER0_ISR_PERIOD_MS: u32 = 5;
+
+fn adsr_ui_to_rate(ui_value: u16) -> u16 {
+    // 0..32768 -> 1ms..2000ms -> hardware rate
+    let ms_x32k = 32768u32 + ui_value as u32 * 1999;
+    let rate = (45_000_000u64 / ms_x32k as u64) as u32;
+    rate.min(65535) as u16
+}
 
 fn timer0_handler(app: &Mutex<RefCell<App>>) {
 
@@ -68,13 +78,20 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         // Update synthesizer
         //
 
-        let drive_smooth = app.drive_smoother.proc_u16(opts.poly.drive.value);
-        app.synth.set_drive(drive_smooth);
+        let jack = app.ui.pmod.jack();
+        let drive_smooth = app.drive_smoother.proc_u16(opts.effect.drive.value);
+        // Skip drive CSR write when jack 2 is patched
+        if (jack & (1 << 2)) == 0 {
+            app.synth.set_drive(drive_smooth);
+        }
 
-        let reso_smooth = app.reso_smoother.proc_u16(opts.poly.reso.value);
+        // Map 0-1 UI range to 32768-8192 hardware range (inverted)
+        let reso_ui = opts.effect.reso.value as u32;
+        let reso_hw = (32768 - reso_ui * 24576 / 32768) as u16;
+        let reso_smooth = app.reso_smoother.proc_u16(reso_hw);
         app.synth.set_reso(reso_smooth);
 
-        let diffuse_smooth = app.diffusion_smoother.proc_u16(opts.poly.diffuse.value);
+        let diffuse_smooth = app.diffusion_smoother.proc_u16(opts.effect.diffuse.value);
         let coeff_dry: i32 = (32768 - diffuse_smooth) as i32;
         let coeff_wet: i32 = diffuse_smooth as i32;
 
@@ -88,9 +105,26 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         app.synth.set_matrix_coefficient(2, 6, coeff_wet);
         app.synth.set_matrix_coefficient(3, 7, coeff_wet);
 
+        // ADSR params
+        app.synth.set_attack_rate(adsr_ui_to_rate(opts.adsr.attack.value));
+        app.synth.set_decay_rate(adsr_ui_to_rate(opts.adsr.decay.value));
+        app.synth.set_sustain_level((opts.adsr.sustain.value as u32 * 65535 / 32768) as u16);
+        app.synth.set_release_rate(adsr_ui_to_rate(opts.adsr.release.value));
+
+        // Wavetable update on parameter change
+        if opts.osc.waveform.value != app.last_waveform
+            || opts.osc.proc.value != app.last_proc_mode
+            || opts.osc.proc_amt.value != app.last_proc_amt
+        {
+            wavetable::wt_write(&mut app.synth, opts.osc.waveform.value,
+                                opts.osc.proc.value, opts.osc.proc_amt.value);
+            app.last_waveform = opts.osc.waveform.value;
+            app.last_proc_mode = opts.osc.proc.value;
+            app.last_proc_amt = opts.osc.proc_amt.value;
+        }
 
         // Touch controller logic (sends MIDI to internal polysynth)
-        if opts.poly.touch_control.value == TouchControl::On {
+        if opts.misc.touch_ctrl.value == TouchControl::On {
             app.ui.touch_led_mask(0b00111111);
             let touch = app.ui.pmod.touch();
             let jack = app.ui.pmod.jack();
@@ -118,6 +152,9 @@ struct App {
     reso_smoother: OnePoleSmoother,
     diffusion_smoother: OnePoleSmoother,
     touch_controller: MidiTouchController,
+    last_waveform: Waveform,
+    last_proc_mode: ProcMode,
+    last_proc_amt: u16,
 }
 
 impl App {
@@ -140,6 +177,9 @@ impl App {
             reso_smoother,
             diffusion_smoother,
             touch_controller,
+            last_waveform: Waveform::default(),
+            last_proc_mode: ProcMode::default(),
+            last_proc_amt: 0,
         }
     }
 }
@@ -311,6 +351,37 @@ fn main() -> ! {
                                    opts.beam.hue.value).ok();
                 draw::draw_name(&mut display, h_active/2, v_active-50, opts.beam.hue.value,
                                 &bootinfo.manifest.name, &bootinfo.manifest.tag, &modeline).ok();
+                if opts.tracker.page.value == Page::Adsr {
+                    use draw::AdsrPhase;
+                    let highlight = opts.selected().and_then(|i| match i {
+                        0 => Some(AdsrPhase::Attack),
+                        1 => Some(AdsrPhase::Decay),
+                        2 => Some(AdsrPhase::Sustain),
+                        3 => Some(AdsrPhase::Release),
+                        _ => None,
+                    });
+                    draw::draw_adsr(&mut display,
+                        h_active/2-190, 75,
+                        125, 40,
+                        opts.adsr.attack.value,
+                        opts.adsr.decay.value,
+                        opts.adsr.sustain.value,
+                        opts.adsr.release.value,
+                        opts.beam.hue.value,
+                        highlight).ok();
+                }
+                if opts.tracker.page.value == Page::Osc {
+                    const PREVIEW_LEN: usize = 64;
+                    let mut preview = [0i16; PREVIEW_LEN];
+                    wavetable::wt_preview(&mut preview,
+                        opts.osc.waveform.value, opts.osc.proc.value,
+                        opts.osc.proc_amt.value);
+                    draw::draw_waveform_preview(&mut display,
+                        h_active/2-190, 80,
+                        125, 40,
+                        opts.beam.hue.value,
+                        &preview).ok();
+                }
             }
 
             if on_help_page {
@@ -332,15 +403,15 @@ fn main() -> ! {
 
             vscope.set_hue(opts.beam.hue.value);
             vscope.set_intensity(opts.beam.intensity.value);
-            vscope.set_xscale(opts.vector.xscale.value);
-            vscope.set_yscale(opts.vector.yscale.value);
+            vscope.set_xscale(opts.beam.scale.value);
+            vscope.set_yscale(opts.beam.scale.value);
 
             if !on_help_page {
                 for ix in 0usize..N_VOICES {
                     let j = (N_VOICES-1)-ix;
                     draw::draw_voice(&mut display,
-                                     ((h_active as f32)/2.0f32 + 330.0f32*f32::cos(2.3f32 + 2.0f32 * j as f32 / (N_VOICES as f32))) as i32,
-                                     ((v_active as f32)/2.0f32 + 330.0f32*f32::sin(2.3f32 + 2.0f32 * j as f32 / (N_VOICES as f32))) as u32 - 15,
+                                     ((h_active as f32)/2.0f32 + 330.0f32*f32::cos(2.45f32 + 1.5f32 * j as f32 / (N_VOICES as f32))) as i32,
+                                     ((v_active as f32)/2.0f32 + 330.0f32*f32::sin(2.45f32 + 1.5f32 * j as f32 / (N_VOICES as f32))) as u32 - 15,
                                      notes[ix], cutoffs[ix], opts.beam.hue.value).ok();
                 }
             }

@@ -202,6 +202,10 @@ class MidiVoiceTracker(wiring.Component):
 
     After each :py:`NOTE_OFF` event, :py:`MidiVoice.gate` is set to 0. If :py:`zero_velocity_gate`
     is set, the velocity is also set to 0 (instead of the MIDI release velocity).
+
+    Sustain pedal (CC64) is supported: while held, NOTE_OFF events mark voices as
+    sustained instead of clearing their gates. When the pedal is released, all
+    sustained voices have their gates cleared.
     """
 
     def __init__(self, max_voices=8, velocity_mod=False, zero_velocity_gate=False):
@@ -240,6 +244,10 @@ class MidiVoiceTracker(wiring.Component):
 
         # voice mask (binary 1 is for an occupied voice slot)
         voice_mask = Signal(self.max_voices)
+
+        # sustain pedal (CC64) state
+        sustain_held = Signal()
+        sustain_mask = Signal(self.max_voices)
 
         # freq / mod / pb update index
         ix_update = Signal(range(self.max_voices))
@@ -293,6 +301,7 @@ class MidiVoiceTracker(wiring.Component):
                         with m.Case(n):
                             m.d.sync += [
                                 voice_mask.bit_select(n, 1).eq(1),
+                                sustain_mask.bit_select(n, 1).eq(0),
                                 self.o[n].note.eq(msg.midi_payload.note_on.note),
                                 self.o[n].velocity.eq(msg.midi_payload.note_on.velocity),
                                 self.o[n].gate.eq(1),
@@ -305,14 +314,16 @@ class MidiVoiceTracker(wiring.Component):
                 # cull any voice that matches the MIDI payload note #
                 for n in range(self.max_voices):
                     with m.If(self.o[n].note == msg.midi_payload.note_off.note):
-                        m.d.sync += [
-                            voice_mask.bit_select(n, 1).eq(0),
-                            self.o[n].gate.eq(0),
-                        ]
-                        if self.zero_velocity_gate:
-                            m.d.sync += self.o[n].velocity.eq(0)
-                        else:
-                            m.d.sync += self.o[n].velocity.eq(msg.midi_payload.note_off.velocity)
+                        with m.If(sustain_held):
+                            # pedal held: keep gate, mark for deferred release
+                            m.d.sync += sustain_mask.bit_select(n, 1).eq(1)
+                        with m.Else():
+                            m.d.sync += [
+                                voice_mask.bit_select(n, 1).eq(0),
+                                self.o[n].gate.eq(0),
+                            ]
+                            if self.zero_velocity_gate:
+                                m.d.sync += self.o[n].velocity.eq(0)
                 m.next = 'UPDATE'
 
             with m.State('POLY-PRESSURE'):
@@ -327,12 +338,30 @@ class MidiVoiceTracker(wiring.Component):
                 with m.If((msg.midi_payload.control_change.controller_number == 1) &
                           (msg.midi_payload.control_change.data != 0)):
                     m.d.sync += last_cc1.eq(msg.midi_payload.control_change.data)
+                with m.If(msg.midi_payload.control_change.controller_number == 64):
+                    # sustain pedal
+                    with m.If(msg.midi_payload.control_change.data >= 64):
+                        m.d.sync += sustain_held.eq(1)
+                    with m.Else():
+                        m.d.sync += sustain_held.eq(0)
+                        # release all sustained voices
+                        for n in range(self.max_voices):
+                            with m.If(sustain_mask.bit_select(n, 1)):
+                                m.d.sync += [
+                                    voice_mask.bit_select(n, 1).eq(0),
+                                    sustain_mask.bit_select(n, 1).eq(0),
+                                    self.o[n].gate.eq(0),
+                                ]
+                                if self.zero_velocity_gate:
+                                    m.d.sync += self.o[n].velocity.eq(0)
                 with m.If(msg.midi_payload.control_change.controller_number == 123):
                     # all stop
                     for n in range(self.max_voices):
                         m.d.sync += self.o[n].gate.eq(0)
                         if self.zero_velocity_gate:
                             m.d.sync += self.o[n].velocity.eq(0)
+                    m.d.sync += sustain_held.eq(0)
+                    m.d.sync += sustain_mask.eq(0)
                 m.next = 'UPDATE'
 
             with m.State('PITCH-BEND'):

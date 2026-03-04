@@ -12,7 +12,7 @@ This board needs a ``TLQ-MODULE`` or any FPGA board that has a PMOD port in orde
 
 - **Expander for TLQ-MODULE**
     - Add more audio channels to Tiliqua, by plugging it into either the ``ex0`` or ``ex1`` PMOD expansion ports. An example of instantiating extra audio channels inside Tiliqua bitstreams can be found in the :class:`TRIPLE-MIRROR <top.dsp.top.TripleMirror>` example project.
-    - I'm not quite there yet, but plan to add support for the expansion boards for the USB audio interface bitstreams, as this is probably one of the more interesting use-cases (12-in, 12-out audio interface...)
+    - **NEW:** I now have an experimental build called ``xbeam-ex`` which is similar to ``xbeam``, but exposes a 12in/12out USB interface, expecting 1 or 2 expanders connected. `See here for detailed instructions <https://github.com/apfaudio/tiliqua/issues/155>`_ !
 - **Audio IO for different FPGA board**
     - **For Amaranth:** I would suggest re-using the ``EurorackPmod`` component in ``src/tiliqua/periph/eurorack_pmod.py``. It has drivers for every chip on this board. You can use it in the same way as the :class:`TRIPLE-MIRROR <top.dsp.top.TripleMirror>` example linked above, on any FPGA board.
     - **For Verilog:** take a look at the `eurorack-pmod repository <https://github.com/apfaudio/eurorack-pmod>`_, where I provide some DSP examples for different FPGA boards. *Note: at this time, the verilog repo is a bit out of date and refers to R3.3, even though I am shipping R3.5. The hardware is fully backward compatible excluding the touch sensing, which had its mapping changed. So if you compile bitstreams for R3.3 in that repository, they will also work on R3.5, except the touch sensing, which I am happy to update if there is interest.*

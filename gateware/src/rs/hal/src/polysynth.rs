@@ -28,7 +28,6 @@ macro_rules! impl_polysynth {
                         self.registers.voices5().read().note().bits(),
                         self.registers.voices6().read().note().bits(),
                         self.registers.voices7().read().note().bits(),
-                        // TODO: proper register block. Add them yourself :)
                     ]
                 }
 
@@ -42,7 +41,6 @@ macro_rules! impl_polysynth {
                         self.registers.voices5().read().cutoff().bits(),
                         self.registers.voices6().read().cutoff().bits(),
                         self.registers.voices7().read().cutoff().bits(),
-                        // TODO: proper register block. Add them yourself :)
                     ]
                 }
 
@@ -63,6 +61,27 @@ macro_rules! impl_polysynth {
 
                 pub fn set_reso(&mut self, value: u16)  {
                     self.registers.reso().write(|w| unsafe { w.value().bits(value) } );
+                }
+
+                pub fn set_attack_rate(&mut self, value: u16)  {
+                    self.registers.attack_rate().write(|w| unsafe { w.value().bits(value) } );
+                }
+
+                pub fn set_decay_rate(&mut self, value: u16)  {
+                    self.registers.decay_rate().write(|w| unsafe { w.value().bits(value) } );
+                }
+
+                pub fn set_sustain_level(&mut self, value: u16)  {
+                    self.registers.sustain_level().write(|w| unsafe { w.value().bits(value) } );
+                }
+
+                pub fn set_release_rate(&mut self, value: u16)  {
+                    self.registers.release_rate().write(|w| unsafe { w.value().bits(value) } );
+                }
+
+                pub fn write_wavetable_sample(&mut self, addr: u16, data: i16)  {
+                    self.registers.wt_addr().write(|w| unsafe { w.value().bits(addr) } );
+                    self.registers.wt_data().write(|w| unsafe { w.value().bits(data as u16) } );
                 }
 
                 pub fn midi_write(&mut self, value: u32)  {

@@ -10,6 +10,7 @@ use core::cell::RefCell;
 use micromath::F32Ext;
 use midi_types::*;
 use midi_convert::render_slice::MidiRenderSlice;
+use midi_convert::parse::MidiTryParseSlice;
 
 use tiliqua_pac as pac;
 use tiliqua_hal as hal;
@@ -21,7 +22,8 @@ use pac::constants::*;
 use tiliqua_hal::persist::Persist;
 use tiliqua_fw::*;
 use tiliqua_fw::options::*;
-use opts::Options;
+use opts::{Options, OptionTrait};
+use opts::cc_map::{MidiCcMapper, CcMapMode, CcAction};
 use tiliqua_hal::pmod::EurorackPmod;
 
 use tiliqua_hal::embedded_graphics::prelude::*;
@@ -65,12 +67,25 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         if midi_word != 0 {
             // Blink MIDI activity LED on TRS port
             app.ui.midi_activity();
+
+            let bytes = [
+                (midi_word & 0xFF) as u8,
+                ((midi_word >> 8) & 0xFF) as u8,
+                ((midi_word >> 16) & 0xFF) as u8,
+            ];
+            if let Ok(msg) = MidiMessage::try_parse_slice(&bytes) {
+                if let MidiMessage::ControlChange(_, cc, val) = msg {
+                    if let Some(action) = app.cc_mapper.process(cc.into(), val.into()) {
+                        apply_cc_action(&mut app.ui.opts, &action);
+                        app.ui.external_modify();
+                    }
+                }
+            }
+
             // Optionally dump raw MIDI messages out serial port.
             if opts.misc.serial_debug.value == UsbMidiSerialDebug::On {
                 info!("midi: 0x{:x} 0x{:x} 0x{:x}",
-                      midi_word&0xff,
-                      (midi_word>>8)&0xff,
-                      (midi_word>>16)&0xff);
+                      bytes[0], bytes[1], bytes[2]);
             }
         }
 
@@ -86,7 +101,7 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         }
 
         // Map 0-1 UI range to 32768-8192 hardware range (inverted)
-        let reso_ui = opts.effect.reso.value as u32;
+        let reso_ui = opts.voice.reso.value as u32;
         let reso_hw = (32768 - reso_ui * 24576 / 32768) as u16;
         let reso_smooth = app.reso_smoother.proc_u16(reso_hw);
         app.synth.set_reso(reso_smooth);
@@ -111,16 +126,31 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         app.synth.set_sustain_level((opts.adsr.sustain.value as u32 * 65535 / 32768) as u16);
         app.synth.set_release_rate(adsr_ui_to_rate(opts.adsr.release.value));
 
-        // Wavetable update on parameter change
-        if opts.osc.waveform.value != app.last_waveform
-            || opts.osc.proc.value != app.last_proc_mode
-            || opts.osc.proc_amt.value != app.last_proc_amt
+        // LFO -> phase modulation CSR
         {
-            wavetable::wt_write(&mut app.synth, opts.osc.waveform.value,
-                                opts.osc.proc.value, opts.osc.proc_amt.value);
-            app.last_waveform = opts.osc.waveform.value;
-            app.last_proc_mode = opts.osc.proc.value;
-            app.last_proc_amt = opts.osc.proc_amt.value;
+            use wavetable::{Fix32, CYCLE_LEN};
+            let isr_rate = Fix32::from_num(1000u32 / TIMER0_ISR_PERIOD_MS);
+            // lfo_rate option: 0..50 -> 0..5.0 Hz
+            // Q16.16 from_bits: value * 65536 / 10 = value * 6554
+            let rate_hz = Fix32::from_bits(opts.voice.lfo_rate.value as i32 * 6554);
+            let phase_inc = rate_hz * CYCLE_LEN as i32 / isr_rate;
+            // depth option: 0..32768 -> 0..1.0
+            let depth = Fix32::from_bits(opts.voice.lfo_depth.value as i32 * 2);
+            let lfo_val = wavetable::wt_lfo(&mut app.lfo_phase, phase_inc, depth,
+                                           Waveform::Sine);
+            app.synth.set_lfo(lfo_val);
+        }
+
+        // Wavetable update on parameter change
+        if opts.voice.waveform.value != app.last_waveform
+            || opts.voice.proc.value != app.last_proc_mode
+            || opts.voice.proc_amt.value != app.last_proc_amt
+        {
+            wavetable::wt_write(&mut app.synth, opts.voice.waveform.value,
+                                opts.voice.proc.value, opts.voice.proc_amt.value);
+            app.last_waveform = opts.voice.waveform.value;
+            app.last_proc_mode = opts.voice.proc.value;
+            app.last_proc_amt = opts.voice.proc_amt.value;
         }
 
         // Touch controller logic (sends MIDI to internal polysynth)
@@ -145,6 +175,44 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
     });
 }
 
+fn apply_cc_action(opts: &mut Opts, action: &CcAction<Page>) {
+    opts.tracker.page.value = action.page;
+    let index = opts.view().options().iter()
+        .position(|opt| opt.key().value() == action.option_key);
+    if let Some(i) = index {
+        opts.set_selected(Some(i));
+        let opt = &mut opts.view_mut().options_mut()[i];
+        match action.mode {
+            CcMapMode::Absolute => { opt.set_from_cc(action.cc_value); }
+            CcMapMode::Decrement => { opt.tick_down(); }
+            CcMapMode::Increment => { opt.tick_up(); }
+        }
+    }
+}
+
+fn build_cc_mapper(opts: &Opts) -> MidiCcMapper<Page, 16> {
+    let mut m = MidiCcMapper::new();
+    // Effect page
+    m.add(74, Page::Effect, opts.effect.drive.key().value(),   CcMapMode::Absolute);
+    m.add(71, Page::Voice, opts.voice.reso.key().value(),     CcMapMode::Absolute);
+    m.add(17, Page::Effect, opts.effect.diffuse.key().value(), CcMapMode::Absolute);
+    // Osc page
+    m.add(22, Page::Voice, opts.voice.waveform.key().value(), CcMapMode::Decrement);
+    m.add(23, Page::Voice, opts.voice.waveform.key().value(), CcMapMode::Increment);
+    m.add(24, Page::Voice, opts.voice.proc.key().value(),     CcMapMode::Decrement);
+    m.add(25, Page::Voice, opts.voice.proc.key().value(),     CcMapMode::Increment);
+    m.add(93, Page::Voice, opts.voice.proc_amt.key().value(), CcMapMode::Absolute);
+    // Voice page LFO
+    m.add(76, Page::Voice, opts.voice.lfo_depth.key().value(), CcMapMode::Absolute);
+    m.add(77, Page::Voice, opts.voice.lfo_rate.key().value(),  CcMapMode::Absolute);
+    // ADSR page
+    m.add(73, Page::Adsr, opts.adsr.attack.key().value(),  CcMapMode::Absolute);
+    m.add(75, Page::Adsr, opts.adsr.decay.key().value(),   CcMapMode::Absolute);
+    m.add(79, Page::Adsr, opts.adsr.sustain.key().value(), CcMapMode::Absolute);
+    m.add(72, Page::Adsr, opts.adsr.release.key().value(), CcMapMode::Absolute);
+    m
+}
+
 struct App {
     ui: ui::UI<Encoder0, EurorackPmod0, I2c0, Opts>,
     synth: Polysynth0,
@@ -152,9 +220,14 @@ struct App {
     reso_smoother: OnePoleSmoother,
     diffusion_smoother: OnePoleSmoother,
     touch_controller: MidiTouchController,
+    // wavetable state
     last_waveform: Waveform,
     last_proc_mode: ProcMode,
     last_proc_amt: u16,
+    // midi cc mapper
+    cc_mapper: MidiCcMapper<Page, 16>,
+    // lfo phase accumulator
+    lfo_phase: wavetable::Fix32,
 }
 
 impl App {
@@ -169,6 +242,7 @@ impl App {
         let reso_smoother = OnePoleSmoother::new(0.05f32);
         let diffusion_smoother = OnePoleSmoother::new(0.05f32);
         let touch_controller = MidiTouchController::new();
+        let cc_mapper = build_cc_mapper(&opts);
         Self {
             ui: ui::UI::new(opts, TIMER0_ISR_PERIOD_MS,
                             encoder, pca9635, pmod),
@@ -180,6 +254,8 @@ impl App {
             last_waveform: Waveform::default(),
             last_proc_mode: ProcMode::default(),
             last_proc_amt: 0,
+            cc_mapper,
+            lfo_phase: wavetable::Fix32::ZERO,
         }
     }
 }
@@ -370,12 +446,12 @@ fn main() -> ! {
                         opts.beam.hue.value,
                         highlight).ok();
                 }
-                if opts.tracker.page.value == Page::Osc {
+                if opts.tracker.page.value == Page::Voice {
                     const PREVIEW_LEN: usize = 64;
                     let mut preview = [0i16; PREVIEW_LEN];
                     wavetable::wt_preview(&mut preview,
-                        opts.osc.waveform.value, opts.osc.proc.value,
-                        opts.osc.proc_amt.value);
+                        opts.voice.waveform.value, opts.voice.proc.value,
+                        opts.voice.proc_amt.value);
                     draw::draw_waveform_preview(&mut display,
                         h_active/2-190, 80,
                         125, 40,

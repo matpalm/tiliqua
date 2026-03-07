@@ -10,7 +10,7 @@ use tiliqua_lib::scope::VScale;
 pub enum Page {
     #[default]
     Help,
-    Osc,
+    Voice,
     Adsr,
     Effect,
     Beam,
@@ -79,7 +79,9 @@ int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
 int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
-int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 60 });
+int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 80 });
+int_params!(LfoRateParams<u16>   { step: 2, min: 0, max: 50, format: IntFormat::Scaled { divisor: 10, precision: 1, suffix: "hz" } });
+int_params!(LfoDepthParams<u16>  { step: 2048, min: 0, max: 32768, format: IntFormat::Scaled { divisor: 32768, precision: 2, suffix: "" } });
 
 button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });
 
@@ -90,28 +92,32 @@ pub struct HelpOpts {
 }
 
 #[derive(OptionPage, Clone)]
-pub struct OscOpts {
+pub struct VoiceOpts {
     #[option]
     pub waveform: EnumOption<Waveform>,
     #[option]
     pub proc: EnumOption<ProcMode>,
     #[option(10)]
     pub proc_amt: IntOption<ProcAmtParams>,
+    #[option(16384)]
+    pub reso: IntOption<ResoParams>,
+    #[option(1)]
+    pub lfo_rate: IntOption<LfoRateParams>,
+    #[option(3277)]
+    pub lfo_depth: IntOption<LfoDepthParams>,
 }
 
 #[derive(OptionPage, Clone)]
 pub struct EffectOpts {
     #[option(8192)]
     pub drive: IntOption<DriveParams>,
-    #[option(16384)]
-    pub reso: IntOption<ResoParams>,
     #[option(12288)]
     pub diffuse: IntOption<DiffuseParams>,
 }
 
 #[derive(OptionPage, Clone)]
 pub struct AdsrOpts {
-    #[option(1024)]
+    #[option(0)]
     pub attack: IntOption<AdsrTimeParams>,
     #[option(4096)]
     pub decay: IntOption<AdsrTimeParams>,
@@ -156,8 +162,8 @@ pub struct Opts {
     pub tracker: ScreenTracker<Page>,
     #[page(Page::Help)]
     pub help: HelpOpts,
-    #[page(Page::Osc)]
-    pub osc: OscOpts,
+    #[page(Page::Voice)]
+    pub voice: VoiceOpts,
     #[page(Page::Adsr)]
     pub adsr: AdsrOpts,
     #[page(Page::Effect)]

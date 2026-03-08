@@ -96,7 +96,9 @@ jobs:
       - uses: ./.github/actions/setup-container
       - name: Build all SoC bitstreams (${{ matrix.hw_rev }})
         run: |
-          rm .env.toolchain # Use yosys/nextpnr from oss-cad-suite instead of yowasp-yosys for speed
+          # Use yosys/nextpnr from oss-cad-suite instead of yowasp-yosys for speed
+          git update-index --skip-worktree .env.toolchain
+          rm .env.toolchain
           ./scripts/build_bitstreams_soc.sh --hw=${{ matrix.hw_rev }}
         working-directory: gateware
       - name: Generate build summary
@@ -142,7 +144,9 @@ jobs:
       - uses: ./.github/actions/setup-container
       - name: Build all non-SoC bitstreams (${{ matrix.hw_rev }})
         run: |
-          rm .env.toolchain # Use yosys/nextpnr from oss-cad-suite instead of yowasp-yosys for speed
+          # Use yosys/nextpnr from oss-cad-suite instead of yowasp-yosys for speed
+          git update-index --skip-worktree .env.toolchain
+          rm .env.toolchain
           ./scripts/build_bitstreams_no_soc.sh --hw=${{ matrix.hw_rev }}
         working-directory: gateware
       - name: Generate build summary

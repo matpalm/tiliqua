@@ -48,6 +48,10 @@ def top_level_cli(
         repo_tag = repo.git.describe('--tags', '--exact-match', '--dirty')
     except git.exc.GitCommandError:
         repo_tag = repo.git.describe('--always', '--dirty')
+    if repo.is_dirty():
+        print(f"WARNING: repo is dirty (tag: {repo_tag})")
+        print(repo.git.status())
+        print(repo.git.diff('--stat'))
     # Only keep what the bootloader / bitstreams can display
     repo_tag = repo_tag[:BitstreamManifest.BITSTREAM_TAG_LEN]
 

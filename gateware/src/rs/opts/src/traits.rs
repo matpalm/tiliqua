@@ -41,6 +41,8 @@ pub trait OptionTrait {
     fn encode(&self, buf: &mut [u8]) -> Option<usize>;
     fn decode(&mut self, buf: &[u8]) -> bool;
 
+    fn set_from_cc(&mut self, _value: u8) -> bool { false }
+
     /// Handle button press (toggle_modify). Returns true if handled, false otherwise.
     fn button_press(&mut self) -> bool { false }
 }

@@ -58,6 +58,11 @@ impl<EncoderT: Encoder,
         self.time_since_midi_activity = 0;
     }
 
+    /// Resets the encoder-touched timer so draw/LED feedback activates.
+    pub fn external_modify(&mut self) {
+        self.time_since_encoder_touched = 0;
+    }
+
     pub fn touch_led_mask(&mut self, mask: u8) {
         self.touch_led_mask = mask;
     }

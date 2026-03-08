@@ -11,6 +11,7 @@ mod float;
 mod string;
 mod button;
 pub mod persistence;
+pub mod cc_map;
 
 pub use crate::traits::*;
 pub use crate::integer::*;

@@ -70,9 +70,36 @@ the UI.
                                   │OUT (4x)├──────► out2 (L)
                                   └────────┴──────► out3 (R)
 
-The OSC page allows selection between many wavetables. The 'proc' option
+The VOICE page allows selection between many wavetables. The 'proc' option
 allows applying effects (e.g. saturation, wavefolding, rectify) to
-the wavetable **before** it hits the voice filter.
+the wavetable **before** it hits the voice filter. When no CV is patched
+into input 0, a built-in sine LFO modulates the phase of all voices
+(rate and depth are adjustable on the VOICE page).
+
+The following MIDI CC mappings are supported:
+
+    .. code-block:: text
+
+        CC  Parameter       Mode
+        ──  ─────────       ────
+         1  mod wheel       filter cutoff
+        64  sustain pedal   hold voices
+        22  waveform        prev
+        23  waveform        next
+        24  proc mode       prev
+        25  proc mode       next
+        93  proc amount     absolute
+        71  resonance       absolute
+        76  lfo depth       absolute
+        77  lfo rate        absolute
+        73  attack          absolute
+        75  decay           absolute
+        79  sustain         absolute
+        72  release         absolute
+        74  drive           absolute
+        17  diffuse         absolute
+
+    Pitch bend is also supported.
 
 """
 
@@ -153,6 +180,8 @@ class PolySynth(wiring.Component):
     wt_write_data: In(signed(16))
     wt_write_en: In(unsigned(1))
 
+    lfo: In(ASQ)
+
     # Jack detection (directly from pmod hardware)
     jack: In(unsigned(8))
 
@@ -181,9 +210,17 @@ class PolySynth(wiring.Component):
         with m.If(self.i.valid):
             m.d.sync += cv.eq(self.i.payload)
 
-        # CV 0: phase modulation (when jack 0 patched)
+        m.submodules.lfo_lpf = lfo_lpf = dsp.OnePole()
+        m.d.comb += [
+            lfo_lpf.i.payload.eq(self.lfo),
+            lfo_lpf.i.valid.eq(self.i.valid),
+            lfo_lpf.o.ready.eq(1),
+            lfo_lpf.shift.eq(6),
+        ]
+
+        # CV 0: phase modulation (when jack 0 patched, otherwise use LFO)
         m.d.comb += voice_block.phase_mod.eq(
-            Mux(self.jack[0], cv[0], 0))
+            Mux(self.jack[0], cv[0], lfo_lpf.o.payload))
 
         # CV 1: velocity_mod override (when jack 1 patched)
         cv1_u8 = Signal(unsigned(8))
@@ -295,6 +332,9 @@ class SynthPeripheral(wiring.Component):
     class ReleaseRate(csr.Register, access="w"):
         value: csr.Field(csr.action.W, unsigned(16))
 
+    class Lfo(csr.Register, access="w"):
+        value: csr.Field(csr.action.W, signed(16))
+
     class WavetableAddr(csr.Register, access="w"):
         value: csr.Field(csr.action.W, unsigned(16))
 
@@ -350,6 +390,7 @@ class SynthPeripheral(wiring.Component):
         self._release_rate  = regs.add("release_rate",  self.ReleaseRate(),   offset=voices_csr_end + 0x28)
         self._wt_addr       = regs.add("wt_addr",       self.WavetableAddr(), offset=voices_csr_end + 0x2C)
         self._wt_data       = regs.add("wt_data",       self.WavetableData(), offset=voices_csr_end + 0x30)
+        self._lfo           = regs.add("lfo",           self.Lfo(),           offset=voices_csr_end + 0x34)
         self._bridge = csr.Bridge(regs.as_memory_map())
         super().__init__({
             "bus": In(csr.Signature(addr_width=regs.addr_width, data_width=regs.data_width)),
@@ -380,6 +421,9 @@ class SynthPeripheral(wiring.Component):
             m.d.sync += self.synth.sustain_level.eq(self._sustain_level.f.value.w_data)
         with m.If(self._release_rate.f.value.w_stb):
             m.d.sync += self.synth.release_rate.eq(self._release_rate.f.value.w_data)
+
+        with m.If(self._lfo.f.value.w_stb):
+            m.d.sync += self.synth.lfo.as_value().eq(self._lfo.f.value.w_data)
 
         # Wavetable write: latch address on addr write, commit on data write
         wt_addr_reg = Signal(9)

@@ -79,6 +79,10 @@ macro_rules! impl_polysynth {
                     self.registers.release_rate().write(|w| unsafe { w.value().bits(value) } );
                 }
 
+                pub fn set_lfo(&mut self, value: i16)  {
+                    self.registers.lfo().write(|w| unsafe { w.value().bits(value as u16) } );
+                }
+
                 pub fn write_wavetable_sample(&mut self, addr: u16, data: i16)  {
                     self.registers.wt_addr().write(|w| unsafe { w.value().bits(addr) } );
                     self.registers.wt_data().write(|w| unsafe { w.value().bits(data as u16) } );

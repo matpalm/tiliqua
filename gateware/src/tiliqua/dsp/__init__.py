@@ -35,6 +35,7 @@ from .oscillators import *
 from .resample import *
 from .stream_util import *
 from .vca import *
+from .voice_block import *
 
 # Dummy values used to hook up to unused stream in/out ports, so they don't block forever
 ASQ_READY = stream.Signature(ASQ, always_ready=True).flip().create()

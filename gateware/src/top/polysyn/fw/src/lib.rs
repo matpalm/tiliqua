@@ -19,3 +19,4 @@ hal::impl_vector! {
 
 pub mod handlers;
 pub mod options;
+pub mod wavetable;

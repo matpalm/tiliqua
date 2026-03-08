@@ -123,6 +123,45 @@ class WrapCore(wiring.Component):
 
         return m
 
+class BlockMerge(wiring.Component):
+    """Join N :class:`Block` streams into one with a merged payload.
+
+    Waits for all inputs to be valid, then emits a single Block whose
+    ``sample`` is a :class:`data.StructLayout` built from the given dict.
+    Input port names match the dict keys.
+
+    WARN: The ``first`` flag is forwarded from the first input, this component
+    does not drop elements until all ``first`` flags are aligned!
+
+    Parameters
+    ----------
+    fields : dict of str -> Shape
+        Mapping of field names to shapes. Each entry becomes an input port.
+    """
+
+    def __init__(self, fields):
+        self._names = list(fields.keys())
+        ports = {name: In(stream.Signature(Block(shape)))
+                 for name, shape in fields.items()}
+        ports["o"] = Out(stream.Signature(Block(data.StructLayout(fields))))
+        super().__init__(ports)
+
+    def elaborate(self, platform):
+        m = Module()
+        inputs = [getattr(self, name) for name in self._names]
+        all_valid = Cat([i.valid for i in inputs]).all()
+        m.d.comb += [
+            self.o.valid.eq(all_valid),
+            self.o.payload.first.eq(inputs[0].payload.first),
+        ]
+        for name, inp in zip(self._names, inputs):
+            m.d.comb += [
+                getattr(self.o.payload.sample, name).eq(inp.payload.sample),
+                inp.ready.eq(self.o.ready & all_valid),
+            ]
+        return m
+
+
 def connect_without_payload(m, stream_o, stream_i):
     """
     Connect 2 :class:`Block` streams *without* connecting the payload.

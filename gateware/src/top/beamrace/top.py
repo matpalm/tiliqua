@@ -462,7 +462,8 @@ def argparse_fragment(args):
         sys.exit(-1)
 
     cls_name = CORES[args.core]
-    args.name = 'BR-' + args.core.upper().replace('_','-')
+    if args.name == 'BEAMRACE':
+        args.name = 'BR-' + args.core.upper().replace('_','-')
     return {
         "beamrace_core": cls_name,
     }

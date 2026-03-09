@@ -24,11 +24,16 @@ parallel --halt now,fail=1 --jobs 0 --ungroup "{} $@" ::: \
   "pdm dsp build --dsp-core=stft_mirror" \
   "pdm dsp build --dsp-core=vocode" \
   "pdm dsp build --dsp-core=dwo" \
-  "pdm beamrace build --core=stripes" \
-  "pdm beamrace build --core=balls" \
-  "pdm beamrace build --core=checkers" \
-  "pdm vectorscope_no_soc build --fs-192khz" \
-  "pdm vectorscope_no_soc build --fs-192khz --spectrogram --name=spectrogram" \
+  "pdm beamrace build --core=stripes --modeline 1280x720p60 --name STRIPES12" \
+  "pdm beamrace build --core=stripes --modeline 720x720p60r2 --name STRIPES7" \
+  "pdm beamrace build --core=balls --modeline 1280x720p60 --name BALLS12" \
+  "pdm beamrace build --core=balls --modeline 720x720p60r2 --name BALLS7" \
+  "pdm beamrace build --core=checkers --modeline 1280x720p60 --name CHECKERS12" \
+  "pdm beamrace build --core=checkers --modeline 720x720p60r2 --name CHECKERS7" \
+  "pdm vectorscope_no_soc build --fs-192khz --modeline 1280x720p60 --name VSCOPE12" \
+  "pdm vectorscope_no_soc build --fs-192khz --modeline 720x720p60r2 --name VSCOPE7" \
+  "pdm vectorscope_no_soc build --fs-192khz --spectrogram --modeline 1280x720p60 --name=SPECTRO12" \
+  "pdm vectorscope_no_soc build --fs-192khz --spectrogram --modeline 720x720p60r2 --name=SPECTRO7" \
   "pdm bootstub build" \
   "pdm usb_audio build" \
   "pdm usb_host build"

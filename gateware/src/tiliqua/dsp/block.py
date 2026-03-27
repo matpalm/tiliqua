@@ -162,6 +162,51 @@ class BlockMerge(wiring.Component):
         return m
 
 
+class BlockSelect(wiring.Component):
+
+    """
+    Take a block of a certain size, and drop any entries
+    not in 'indices'. Converts a ``Block`` stream of wider
+    blocks into a ``Block`` stream of smaller blocks by
+    dropping elements based on their index relative to 'first'.
+    """
+
+    def __init__(self, shape, indices):
+        self._indices = list(indices)
+        self._max_ix = max(indices)
+        super().__init__({
+            "i": In(stream.Signature(Block(shape))),
+            "o": Out(stream.Signature(Block(shape))),
+        })
+
+    def elaborate(self, platform):
+        m = Module()
+
+        ix = Signal(range(self._max_ix + 1))
+        keep = Signal()
+        first_out = Signal()
+
+        for n, sel in enumerate(self._indices):
+            with m.If(ix == sel):
+                m.d.comb += keep.eq(1)
+                m.d.comb += first_out.eq(n == 0)
+
+        m.d.comb += [
+            self.o.payload.sample.eq(self.i.payload.sample),
+            self.o.payload.first.eq(first_out),
+            self.o.valid.eq(self.i.valid & keep),
+            self.i.ready.eq(Mux(keep, self.o.ready, 1)),
+        ]
+
+        with m.If(self.i.valid & self.i.ready):
+            with m.If(self.i.payload.first):
+                m.d.sync += ix.eq(1)
+            with m.Else():
+                m.d.sync += ix.eq(ix + 1)
+
+        return m
+
+
 def connect_without_payload(m, stream_o, stream_i):
     """
     Connect 2 :class:`Block` streams *without* connecting the payload.

@@ -47,12 +47,15 @@ class BlockLPF(wiring.Component):
     def __init__(self,
                  shape: fixed.Shape,
                  sz: int,
+                 beta: float = 0.75,
                  macp = None):
         """
         shape : Shape
             Shape of fixed-point number to use for block streams.
         sz : int
             Number of independent filters, must exactly match the size of each block.
+        beta : float
+            Low-pass 1-pole smoothing constant
         macp : bool
             A :class:`mac.MAC` provider, for multiplies.
         """
@@ -60,8 +63,7 @@ class BlockLPF(wiring.Component):
         self.sz    = sz
         self.macp = macp or mac.MAC.default()
         super().__init__({
-            # Low-pass 1-pole smoothing constant, 0 (slow response) to 1 (fast response).
-            "beta": In(self.shape, init=fixed.Const(0.75, shape=self.shape)),
+            "beta": In(self.shape, init=fixed.Const(beta, shape=self.shape)),
             # Blockwise sets of signals to filter.
             "i": In(stream.Signature(Block(self.shape))),
             "o": Out(stream.Signature(Block(self.shape))),

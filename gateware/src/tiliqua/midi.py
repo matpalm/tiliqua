@@ -9,6 +9,7 @@ from amaranth import *
 from amaranth.lib import data, enum, stream, wiring
 from amaranth.lib.fifo import SyncFIFOBuffered
 from amaranth.lib.memory import Memory
+from amaranth.lib import memory
 from amaranth.lib.wiring import In, Out
 from amaranth_stdio.serial import AsyncSerialRX
 
@@ -16,7 +17,9 @@ from luna.gateware.stream.future import Packet
 
 from amaranth_future import fixed
 
-from .dsp import ASQ  # hardware native fixed-point sample type
+from .dsp import ASQ, block
+
+from tiliqua.build.types import BitstreamHelp
 
 MIDI_BAUD_RATE = 31250
 
@@ -467,9 +470,6 @@ class MonoMidiCV(wiring.Component):
     out3: Mod Wheel (CC1)
     """
 
-    # Only needed for this core
-    from tiliqua.build.types import BitstreamHelp
-
     bitstream_help = BitstreamHelp(
         brief="TRS MIDI to CV conversion.",
         io_left=['','','','','gate', 'V/oct', 'velocity', 'mod wheel'],
@@ -544,3 +544,82 @@ class MonoMidiCV(wiring.Component):
 
         return m
 
+class CCFilter(wiring.Component):
+
+    """
+    Latch MIDI CC values from a :py:`MidiMessage` stream and emit them as
+    a :py:`Block(ASQ)` of length 128 (all CCs) on each :py:`strobe`.
+
+    channel : int or None
+        MIDI channel to listen to (0-15). None == all.
+    """
+
+    N_CCS = 128
+
+    def __init__(self, channel=None):
+        self.channel = channel
+        super().__init__({
+            "strobe": In(1),
+            "i": In(stream.Signature(MidiMessage)),
+            "o": Out(stream.Signature(block.Block(ASQ))),
+        })
+
+    def elaborate(self, platform):
+        m = Module()
+
+        # Memory for all 128 CC values
+        m.submodules.mem = mem = memory.Memory(
+            shape=ASQ, depth=self.N_CCS, init=[])
+        wr = mem.write_port()
+        rd = mem.read_port()
+
+        # Always consume MIDI. Latch CC values from MIDI stream
+        m.d.comb += self.i.ready.eq(1)
+        m.d.sync += wr.en.eq(0)
+        with m.If(self.i.valid):
+            msg = self.i.payload
+            channel_match = Signal()
+            if self.channel is not None:
+                m.d.comb += channel_match.eq(
+                    msg.midi_channel == self.channel)
+            else:
+                m.d.comb += channel_match.eq(1)
+            with m.If(channel_match):
+                with m.Switch(msg.midi_type):
+                    with m.Case(MessageType.CONTROL_CHANGE):
+                        cc = msg.midi_payload.control_change
+                        m.d.sync += [
+                            wr.addr.eq(cc.controller_number),
+                            wr.data.as_value().eq(
+                                cc.data << (ASQ.f_bits - 7)),
+                            wr.en.eq(1),
+                        ]
+
+        # Emit CC snapshot block on every strobe
+        ix = Signal(range(self.N_CCS))
+        m.d.comb += [
+            rd.en.eq(1),
+            rd.addr.eq(ix),
+        ]
+        with m.FSM():
+            with m.State('IDLE'):
+                with m.If(self.strobe):
+                    m.d.sync += ix.eq(0)
+                    m.next = 'READ'
+            with m.State('READ'):
+                # read latency
+                m.next = 'EMIT'
+            with m.State('EMIT'):
+                m.d.comb += [
+                    self.o.valid.eq(1),
+                    self.o.payload.sample.eq(rd.data),
+                    self.o.payload.first.eq(ix == 0),
+                ]
+                with m.If(self.o.ready):
+                    with m.If(ix == self.N_CCS - 1):
+                        m.next = 'IDLE'
+                    with m.Else():
+                        m.d.sync += ix.eq(ix + 1)
+                        m.next = 'READ'
+
+        return m

@@ -1159,8 +1159,8 @@ class MidiMatrixMixer(wiring.Component):
            67, 68, 69, 70,
            88, 89, 90, 92]
 
-    # Smoothing constant (~5ms @ 48kHz)
-    SMOOTH_BETA = 0.9958
+    # Smoothing constant (~10ms @ 48kHz)
+    SMOOTH_BETA = 0.9979
 
     # Apply x^2 audio taper to CC values.
     AUDIO_TAPER = True

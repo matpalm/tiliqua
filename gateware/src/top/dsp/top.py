@@ -1162,6 +1162,9 @@ class MidiMatrixMixer(wiring.Component):
     # Smoothing constant (~5ms @ 48kHz)
     SMOOTH_BETA = 0.9958
 
+    # Apply x^2 audio taper to CC values.
+    AUDIO_TAPER = True
+
     i_midi: In(stream.Signature(midi.MidiMessage))
     i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
     o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
@@ -1217,7 +1220,8 @@ class MidiMatrixMixer(wiring.Component):
         # CCFilter: latch all 128 CCs from MIDI event stream, emit latest
         # snapshot as `Block` of 128 samples every 'strobe' (48kHz).
         # Effectively emits every CC at audio rate with no smoothing.
-        m.submodules.cc_filter = cc_filter = midi.CCFilter()
+        m.submodules.cc_filter = cc_filter = midi.CCFilter(
+            audio_taper=self.AUDIO_TAPER)
         m.d.comb += cc_filter.strobe.eq(self.i.valid & self.i.ready)
         # BlockSelect: pick CC at desired indices from the 128-sample block,
         # emitting 16-sample blocks.

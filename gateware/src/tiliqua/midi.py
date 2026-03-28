@@ -556,8 +556,9 @@ class CCFilter(wiring.Component):
 
     N_CCS = 128
 
-    def __init__(self, channel=None):
+    def __init__(self, channel=None, audio_taper=False):
         self.channel = channel
+        self.audio_taper = audio_taper
         super().__init__({
             "strobe": In(1),
             "i": In(stream.Signature(MidiMessage)),
@@ -567,9 +568,9 @@ class CCFilter(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        # Memory for all 128 CC values
+        # Memory for all 128 CC values stored as UQ(0,7).
         m.submodules.mem = mem = memory.Memory(
-            shape=ASQ, depth=self.N_CCS, init=[])
+            shape=fixed.UQ(0, 7), depth=self.N_CCS, init=[])
         wr = mem.write_port()
         rd = mem.read_port()
 
@@ -590,17 +591,24 @@ class CCFilter(wiring.Component):
                         cc = msg.midi_payload.control_change
                         m.d.sync += [
                             wr.addr.eq(cc.controller_number),
-                            wr.data.as_value().eq(
-                                cc.data << (ASQ.f_bits - 7)),
+                            wr.data.eq(cc.data),
                             wr.en.eq(1),
                         ]
 
-        # Emit CC snapshot block on every strobe
+        # Emit CC snapshot block on every strobe.
         ix = Signal(range(self.N_CCS))
         m.d.comb += [
             rd.en.eq(1),
             rd.addr.eq(ix),
         ]
+
+        # Convert UQ(0,7) to ASQ, optionally applying x^2 audio taper.
+        sample_out = Signal(ASQ)
+        if self.audio_taper:
+            m.d.comb += sample_out.eq(rd.data * rd.data)
+        else:
+            m.d.comb += sample_out.eq(rd.data)
+
         with m.FSM():
             with m.State('IDLE'):
                 with m.If(self.strobe):
@@ -612,7 +620,7 @@ class CCFilter(wiring.Component):
             with m.State('EMIT'):
                 m.d.comb += [
                     self.o.valid.eq(1),
-                    self.o.payload.sample.eq(rd.data),
+                    self.o.payload.sample.eq(sample_out),
                     self.o.payload.first.eq(ix == 0),
                 ]
                 with m.If(self.o.ready):

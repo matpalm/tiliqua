@@ -1154,10 +1154,10 @@ class MidiMatrixMixer(wiring.Component):
     MIDI_CHANNEL = None
 
     # Which MIDI CC controls which mixer coefficient?
-    CCS = [70, 71, 72, 73,
-           74, 75, 76, 77,
-           78, 79, 80, 81,
-           82, 83, 84, 85]
+    CCS = [73, 75, 79, 72,
+           81, 82, 83, 85,
+           67, 68, 69, 70,
+           88, 89, 90, 92]
 
     # Smoothing constant (~5ms @ 48kHz)
     SMOOTH_BETA = 0.9958

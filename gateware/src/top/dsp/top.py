@@ -16,6 +16,7 @@ Designs demoing parts of the DSP library. Build any of them as follows:
 """
 
 import math
+from scipy.interpolate import CubicHermiteSpline
 import sys
 
 from amaranth import *
@@ -1197,8 +1198,14 @@ class MidiMatrixMixer(wiring.Component):
 
         m.submodules.mac_server = mac_server = dsp.mac.RingMACServer()
 
+        knee = 0.6
+        spline = CubicHermiteSpline([knee, 1.0], [knee, 1.0], [1.0, 0.0])
         def soft_sat(x):
-            return math.tanh(x * 2.0) * 0.5
+            ax = abs(x)
+            if ax <= knee:
+                return x
+            else:
+                return math.copysign(float(spline(ax)), x)
         for n in range(4):
             ws = dsp.WaveShaper(lut_function=soft_sat, macp=mac_server.new_client())
             m.submodules[f"soft_sat_{n}"] = ws

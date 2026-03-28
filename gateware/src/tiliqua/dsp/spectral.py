@@ -47,21 +47,24 @@ class BlockLPF(wiring.Component):
     def __init__(self,
                  shape: fixed.Shape,
                  sz: int,
+                 beta: float = 0.75,
                  macp = None):
         """
         shape : Shape
             Shape of fixed-point number to use for block streams.
         sz : int
             Number of independent filters, must exactly match the size of each block.
+        beta : float
+            Low-pass 1-pole smoothing constant
         macp : bool
             A :class:`mac.MAC` provider, for multiplies.
         """
         self.shape = shape
+        self.i_shape = fixed.SQ(shape.i_bits, shape.f_bits + 2)
         self.sz    = sz
         self.macp = macp or mac.MAC.default()
         super().__init__({
-            # Low-pass 1-pole smoothing constant, 0 (slow response) to 1 (fast response).
-            "beta": In(self.shape, init=fixed.Const(0.75, shape=self.shape)),
+            "beta": In(self.shape, init=fixed.Const(beta, shape=self.shape)),
             # Blockwise sets of signals to filter.
             "i": In(stream.Signature(Block(self.shape))),
             "o": Out(stream.Signature(Block(self.shape))),
@@ -76,7 +79,7 @@ class BlockLPF(wiring.Component):
         # Filter memory and ports
         #
 
-        m.submodules.mem = mem = memory.Memory(shape=self.shape, depth=self.sz, init=[])
+        m.submodules.mem = mem = memory.Memory(shape=self.i_shape, depth=self.sz, init=[])
         mem_rd = mem.read_port()
         mem_wr = mem.write_port()
 
@@ -85,7 +88,7 @@ class BlockLPF(wiring.Component):
         #
 
         idx = Signal(range(self.sz+1))
-        l_in = Signal(self.shape)
+        l_in = Signal(self.i_shape)
         m.d.comb += [
             mem_rd.en.eq(1),
             mem_rd.addr.eq(idx),
@@ -96,6 +99,8 @@ class BlockLPF(wiring.Component):
         #
         # Iterative MAC state machine
         #
+
+        acc = Signal(mac.SQRNative)
 
         with m.FSM():
             with m.State("IDLE"):
@@ -113,19 +118,20 @@ class BlockLPF(wiring.Component):
 
             with m.State("MAC1"):
                 with mp.Multiply(m, a=mem_rd.data, b=self.beta):
-                    m.d.sync += mem_wr.data.eq(mp.result.z)
+                    m.d.sync += acc.eq(mp.result.z)
                     m.next = "MAC2"
 
             with m.State("MAC2"):
                 with mp.Multiply(m, a=l_in, b=(fixed.Const(1.0, shape=self.shape, clamp=True)-self.beta)):
-                    m.d.sync += mem_wr.data.eq(mem_wr.data + mp.result.z)
+                    m.d.sync += acc.eq(acc + mp.result.z)
                     m.next = "UPDATE"
 
             with m.State("UPDATE"):
                 m.d.sync += [
+                    mem_wr.data.eq(acc),
                     mem_wr.en.eq(1),
                     self.o.payload.first.eq(idx == 0),
-                    self.o.payload.sample.eq(mem_wr.data),
+                    self.o.payload.sample.eq(acc),
                 ]
                 m.next = "OUTPUT"
 

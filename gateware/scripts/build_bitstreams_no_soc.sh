@@ -24,6 +24,7 @@ parallel --halt now,fail=1 --jobs 0 --ungroup "{} $@" ::: \
   "pdm dsp build --dsp-core=stft_mirror" \
   "pdm dsp build --dsp-core=vocode" \
   "pdm dsp build --dsp-core=dwo" \
+  "TILIQUA_ASQ_WIDTH=17 pdm dsp build --dsp-core=mmm" \
   "pdm beamrace build --core=stripes --modeline 1280x720p60 --name STRIPES12" \
   "pdm beamrace build --core=balls --modeline 1280x720p60 --name BALLS12" \
   "pdm beamrace build --core=checkers --modeline 1280x720p60 --name CHECKERS12" \

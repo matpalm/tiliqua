@@ -16,6 +16,7 @@ Designs demoing parts of the DSP library. Build any of them as follows:
 """
 
 import math
+from scipy.interpolate import CubicHermiteSpline
 import sys
 
 from amaranth import *
@@ -29,7 +30,8 @@ from tiliqua import dsp, midi
 from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
-from tiliqua.dsp import ASQ
+from tiliqua.dsp import ASQ, block, spectral
+from tiliqua.dsp.mix import CoeffUpdate
 from tiliqua.periph import eurorack_pmod, psram
 from tiliqua.platform import RebootProvider
 
@@ -1134,6 +1136,108 @@ class CoreTop(Elaboratable):
 
         return m
 
+class MidiMatrixMixer(wiring.Component):
+
+    """
+    MIDI Matrix Mixer
+
+    Matrix mixer for 4 audio ins and 4 audio outs - MIDI CCs
+    are used as matrix coefficients and smoothed at audio rate.
+
+    Soft saturation is applied to the 4 output channels, to
+    improve re sults when output amplitude is close to clipping.
+
+    Any MIDI CC can be assigned to any coefficient.
+    """
+
+    # None == listen to all midi channels
+    MIDI_CHANNEL = None
+
+    # Which MIDI CC controls which mixer coefficient?
+    CCS = [73, 75, 79, 72,
+           81, 82, 83, 85,
+           67, 68, 69, 70,
+           88, 89, 90, 92]
+
+    # Smoothing constant (~10ms @ 48kHz)
+    SMOOTH_BETA = 0.9979
+
+    # Apply x^2 audio taper to CC values.
+    AUDIO_TAPER = True
+
+    i_midi: In(stream.Signature(midi.MidiMessage))
+    i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
+    o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
+
+    bitstream_help = BitstreamHelp(
+        brief="Mix signals via midi",
+        io_left=['in0', 'in1', 'in2', 'in3', 'out0', 'out1', 'out2', 'out3'],
+        io_right=['', '', '', '', '', 'TRS MIDI in']
+    )
+
+    def elaborate(self, platform):
+        m = Module()
+
+        # Matrix mixer, 4 in, 4 out, with coefficient update port.
+        m.submodules.matrix_mix = matrix_mix = dsp.MatrixMix(
+            i_channels=4, o_channels=4,
+            coefficients=[[0.0, 0.0, 0.0, 0.0],
+                          [0.0, 0.0, 0.0, 0.0],
+                          [0.0, 0.0, 0.0, 0.0],
+                          [0.0, 0.0, 0.0, 0.0]],
+            coeff_update=CoeffUpdate.BLOCK)
+
+        assert(len(self.CCS) == matrix_mix.i_channels*matrix_mix.o_channels)
+
+        # Audio IN -> mixer in
+        wiring.connect(m, wiring.flipped(self.i), matrix_mix.i)
+
+        # Split mixer output into 4 separate channels, saturation on each one,
+        # merge back and send to audio OUT.
+        m.submodules.split4 = split4 = dsp.Split(
+            n_channels=4, source=matrix_mix.o)
+        m.submodules.merge4 = merge4 = dsp.Merge(
+            n_channels=4, sink=wiring.flipped(self.o))
+
+        m.submodules.mac_server = mac_server = dsp.mac.RingMACServer()
+
+        knee = 0.6
+        spline = CubicHermiteSpline([knee, 1.0], [knee, 1.0], [1.0, 0.0])
+        def soft_sat(x):
+            ax = abs(x)
+            if ax <= knee:
+                return x
+            else:
+                return math.copysign(float(spline(ax)), x)
+        for n in range(4):
+            ws = dsp.WaveShaper(lut_function=soft_sat, macp=mac_server.new_client())
+            m.submodules[f"soft_sat_{n}"] = ws
+            wiring.connect(m, split4.o[n], ws.i)
+            wiring.connect(m, ws.o, merge4.i[n])
+
+        # MIDI -> MatrixMix coefficient writes
+        #
+        # CCFilter: latch all 128 CCs from MIDI event stream, emit latest
+        # snapshot as `Block` of 128 samples every 'strobe' (48kHz).
+        # Effectively emits every CC at audio rate with no smoothing.
+        m.submodules.cc_filter = cc_filter = midi.CCFilter(
+            audio_taper=self.AUDIO_TAPER)
+        m.d.comb += cc_filter.strobe.eq(self.i.valid & self.i.ready)
+        # BlockSelect: pick CC at desired indices from the 128-sample block,
+        # emitting 16-sample blocks.
+        m.submodules.cc_select = cc_select = block.BlockSelect(ASQ, self.CCS)
+        # BlockLPF: smooth each 16-sample block point-wise with a one-pole
+        # LPF at audio rate (~5ms time constant).
+        m.submodules.cc_lpf = cc_lpf = spectral.BlockLPF(
+            shape=ASQ, sz=len(self.CCS), beta=self.SMOOTH_BETA)
+        wiring.connect(m, wiring.flipped(self.i_midi), cc_filter.i)
+        wiring.connect(m, cc_filter.o, cc_select.i)
+        wiring.connect(m, cc_select.o, cc_lpf.i)
+        # Smoothed coefficients -> straight into matrix mixer.
+        wiring.connect(m, cc_lpf.o, matrix_mix.c)
+
+        return m
+
 # Different DSP cores that can be selected at top-level CLI.
 CORES = {
     #                 (touch, class name)
@@ -1157,6 +1261,7 @@ CORES = {
     "vocode":         (False, Vocoder),
     "noise":          (False, Noise),
     "dwo":            (False, DWO),
+    "mmm":            (False, MidiMatrixMixer),
 }
 
 def simulation_ports(fragment):

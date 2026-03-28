@@ -277,7 +277,8 @@ class DSPTests(unittest.TestCase):
             result = await stream.get(ctx, matrix.o)
             self.assertAlmostEqual(result[0].as_float(),  0.3, places=4)
             self.assertAlmostEqual(result[1].as_float(), -0.4, places=4)
-            self.assertAlmostEqual(result[2].as_float(), -0.9, places=4)
+            # 1.1 -> saturates to 1
+            self.assertAlmostEqual(result[2].as_float(),  1.0, places=4)
             self.assertAlmostEqual(result[3].as_float(), -0.8, places=4)
 
         sim = Simulator(matrix)

@@ -167,6 +167,11 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
             app.ui.touch_led_mask(0b00111111);
             let touch = app.ui.pmod.touch();
             let jack = app.ui.pmod.jack();
+
+            // Output 1 (jack 5): auto mode when plugged (shows clock from DAC)
+            if (jack & (1 << 5)) != 0 {
+                app.ui.pmod.led_set_auto(5);
+            }
             let msgs = app.touch_controller.update(&touch, jack);
             for msg in msgs {
                 if msg != MidiMessage::Stop {

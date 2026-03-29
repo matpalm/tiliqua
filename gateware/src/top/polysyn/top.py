@@ -15,7 +15,7 @@
                      └────┘
                      ┌────┐
         G3    touch4 │out0│─► -
-        C4    touch5 │out1│─► -
+        C4    touch5 │out1│─► MIDI CLK
         -     touch6 │out2│─► audio out (L)
         -     touch7 │out3│─► audio out (R)
                      └────┘
@@ -100,6 +100,9 @@ The following MIDI CC mappings are supported:
 
     Pitch bend is also supported.
 
+If a MIDI clock is present on TRS or USB MIDI, it is divided by 24 (1PPQN)
+and sent out on output jack 1. STOP/START/CONTINUE is respected. The LED
+will pulse with the clock ONLY if that jack is connected.
 """
 
 import math
@@ -111,6 +114,8 @@ from amaranth.lib import data, stream, wiring
 from amaranth.lib.fifo import SyncFIFOBuffered
 from amaranth.lib.wiring import In, Out, connect, flipped
 from amaranth_soc import csr
+
+from amaranth_future import fixed
 
 from guh.engines.midi import USBMIDIHost
 
@@ -558,6 +563,8 @@ class PolySoc(TiliquaSoc):
 
         pmod0 = self.pmod0_periph.pmod
 
+        m.submodules.clock_div = clock_div = midi.MidiClockDivider()
+
         if sim.is_hw(platform):
             # Polysynth hardware MIDI sources
 
@@ -565,15 +572,17 @@ class PolySoc(TiliquaSoc):
             midi_pins = platform.request("midi")
             m.submodules.serialrx = serialrx = midi.SerialRx(
                     system_clk_hz=60e6, pins=midi_pins)
-            m.submodules.midi_decode_trs = midi_decode_trs = midi.MidiDecodeSerial()
+            m.submodules.midi_decode_trs = midi_decode_trs = midi.MidiDecodeSerial(
+                forward_rt=True)
             wiring.connect(m, serialrx.o, midi_decode_trs.i)
 
-            # USB MIDI host (experimental)
+            # USB MIDI host
             ulpi = platform.request(platform.default_usb_connection)
             m.submodules.usb = usb = USBMIDIHost(
                     bus=ulpi,
             )
-            m.submodules.midi_decode_usb = midi_decode_usb = midi.MidiDecodeUSB()
+            m.submodules.midi_decode_usb = midi_decode_usb = midi.MidiDecodeUSB(
+                forward_rt=True)
             wiring.connect(m, usb.o_midi, midi_decode_usb.i)
 
             # Only enable VBUS if MIDI HOST is enabled.
@@ -585,10 +594,30 @@ class PolySoc(TiliquaSoc):
                 wiring.connect(m, midi_decode_trs.o, self.synth_periph.i_midi)
                 m.d.comb += vbus_o.eq(0)
 
+            # Route RT messages from the active MIDI source to clock divider.
+            # Drain the inactive source, connect the active one.
+            with m.If(self.synth_periph.usb_midi_host):
+                wiring.connect(m, midi_decode_usb.o_rt, clock_div.i)
+                m.d.comb += midi_decode_trs.o_rt.ready.eq(1)
+            with m.Else():
+                wiring.connect(m, midi_decode_trs.o_rt, clock_div.i)
+                m.d.comb += midi_decode_usb.o_rt.ready.eq(1)
+
         # polysynth audio + jack detection
         wiring.connect(m, pmod0.o_cal, polysynth.i)
-        wiring.connect(m, polysynth.o, pmod0.i_cal)
         m.d.comb += polysynth.jack.eq(pmod0.jack)
+
+        m.d.comb += [
+            pmod0.i_cal.payload[0].eq(polysynth.o.payload[0]),
+            # Channel 1 is MIDI clock square wave (0 / 0.5).
+            pmod0.i_cal.payload[1].eq(
+                Mux(clock_div.o, fixed.Const(0.5, shape=ASQ), 0)),
+            # Channel 2/3 are stereo outputs
+            pmod0.i_cal.payload[2].eq(polysynth.o.payload[2]),
+            pmod0.i_cal.payload[3].eq(polysynth.o.payload[3]),
+            pmod0.i_cal.valid.eq(polysynth.o.valid),
+            polysynth.o.ready.eq(pmod0.i_cal.ready),
+        ]
 
         # Upsample channels 0/1 before vectorscope
         fs = self.clock_settings.audio_clock.fs()

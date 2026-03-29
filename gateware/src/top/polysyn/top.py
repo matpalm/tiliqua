@@ -15,7 +15,7 @@
                      └────┘
                      ┌────┐
         G3    touch4 │out0│─► -
-        C4    touch5 │out1│─► -
+        C4    touch5 │out1│─► MIDI CLK
         -     touch6 │out2│─► audio out (L)
         -     touch7 │out3│─► audio out (R)
                      └────┘
@@ -32,9 +32,10 @@ the menu system (MISC page).
 
     - When a jack is patched into input 0, 1 or 2, CV can be used to modulate
       all voices simultaneously up to audio rate (phase mod, filter cutoff and
-      drive). Patch an LFO into phase CV for retro 'tape-wow' like detuning.
-      Patch an oscillator into phase CV for FM effects, or into drive for AM
-      effect.
+      drive). Inputs 1 and 2 act as bipolar offsets on top of the existing
+      envelope / knob value. Patch an LFO into phase CV for retro 'tape-wow'
+      like detuning. Patch an oscillator into phase CV for FM effects, or into
+      drive for AM effect.
 
 Each voice is hard panned left or right in the stereo field, with 2 end-of-chain
 effects: distortion and diffusion (delay), both of which can be mixed in with
@@ -84,10 +85,8 @@ The following MIDI CC mappings are supported:
         ──  ─────────       ────
          1  mod wheel       filter cutoff
         64  sustain pedal   hold voices
-        22  waveform        prev
-        23  waveform        next
-        24  proc mode       prev
-        25  proc mode       next
+        22  waveform        absolute
+        24  proc mode       absolute
         93  proc amount     absolute
         71  resonance       absolute
         76  lfo depth       absolute
@@ -98,9 +97,13 @@ The following MIDI CC mappings are supported:
         72  release         absolute
         74  drive           absolute
         17  diffuse         absolute
+        80  palette         absolute
 
     Pitch bend is also supported.
 
+If a MIDI clock is present on TRS or USB MIDI, it is divided by 24 (1PPQN)
+and sent out on output jack 1. STOP/START/CONTINUE is respected. The LED
+will pulse with the clock ONLY if that jack is connected.
 """
 
 import math
@@ -112,6 +115,8 @@ from amaranth.lib import data, stream, wiring
 from amaranth.lib.fifo import SyncFIFOBuffered
 from amaranth.lib.wiring import In, Out, connect, flipped
 from amaranth_soc import csr
+
+from amaranth_future import fixed
 
 from guh.engines.midi import USBMIDIHost
 
@@ -222,34 +227,27 @@ class PolySynth(wiring.Component):
         m.d.comb += voice_block.phase_mod.eq(
             Mux(self.jack[0], cv[0], lfo_lpf.o.payload))
 
-        # CV 1: velocity_mod override (when jack 1 patched)
-        cv1_u8 = Signal(unsigned(8))
-        with m.If(cv[1].as_value()[-1]):
-            m.d.comb += cv1_u8.eq(0)
-        with m.Else():
-            m.d.comb += cv1_u8.eq(cv[1].as_value() >> 7)
-
-        # CV 2: drive VCA gain (when jack 2 patched)
-        cv2_u16 = Signal(unsigned(16))
-        with m.If(cv[2].as_value()[-1]):
-            m.d.comb += cv2_u16.eq(0)
-        with m.Else():
-            m.d.comb += cv2_u16.eq(cv[2].as_value() << 1)
-
-        drive_val = Signal(unsigned(18))
-        m.d.comb += drive_val.eq(
-            Mux(self.jack[2], cv2_u16, self.drive << 2))
+        # CV 2: drive bipolar offset (when jack 2 patched)
+        SQDrive = dsp.mac.SQNative  # SQ(3, 15)
+        drive_base = Signal(SQDrive)
+        m.d.comb += drive_base.as_value().eq(self.drive << 2)
+        drive_sum = drive_base + cv[2]
+        drive_val = Signal(SQDrive)
+        m.d.comb += drive_val.eq(drive_sum.saturate(SQDrive))
 
         # per-voice params
         for n in range(n_voices):
+            # CV 1: filter envelope bipolar offset (when jack 1 patched)
+            vel_base = fixed.UQ(0, 8)(voice_tracker.o[n].velocity_mod)
+            vel_sum = vel_base + cv[1]
+            vel_out = Signal(dsp.MultiADSR.EnvUQ, name=f"vel_out_{n}")
+            m.d.comb += vel_out.eq(vel_sum.saturate(dsp.MultiADSR.EnvUQ))
             m.d.comb += [
                 self.voice_states[n].eq(voice_tracker.o[n]),
                 self.voice_cutoffs[n].eq(voice_block.voice_cutoffs[n]),
                 voice_block.voice_gates[n].eq(voice_tracker.o[n].gate),
                 voice_block.voice_freq_incs[n].eq(voice_tracker.o[n].freq_inc),
-                voice_block.voice_velocity[n].as_value().eq(
-                    Mux(self.jack[1], cv1_u8,
-                        voice_tracker.o[n].velocity_mod) << 8),
+                voice_block.voice_velocity[n].eq(vel_out),
                 voice_tracker.voice_active[n].eq(voice_block.voice_active[n]),
             ]
 
@@ -505,7 +503,7 @@ class PolySoc(TiliquaSoc):
     # Stored in manifest and used by bootloader for brief summary of each bitstream.
     bitstream_help = BitstreamHelp(
         brief="Touch+MIDI Polysynth (8-voice)",
-        io_left=['phase cv / touch', 'filter cv / touch', 'drive cv / touch', 'touch3', 'touch4', 'touch5', 'out L', 'out R'],
+        io_left=['phase cv / touch', 'filter cv / touch', 'drive cv / touch', 'touch', 'touch', 'clk / touch', 'out L', 'out R'],
         io_right=['navigate menu', 'MIDI host', 'video out', '', '', 'TRS MIDI in']
     )
 
@@ -559,6 +557,8 @@ class PolySoc(TiliquaSoc):
 
         pmod0 = self.pmod0_periph.pmod
 
+        m.submodules.clock_div = clock_div = midi.MidiClockDivider()
+
         if sim.is_hw(platform):
             # Polysynth hardware MIDI sources
 
@@ -566,15 +566,17 @@ class PolySoc(TiliquaSoc):
             midi_pins = platform.request("midi")
             m.submodules.serialrx = serialrx = midi.SerialRx(
                     system_clk_hz=60e6, pins=midi_pins)
-            m.submodules.midi_decode_trs = midi_decode_trs = midi.MidiDecodeSerial()
+            m.submodules.midi_decode_trs = midi_decode_trs = midi.MidiDecodeSerial(
+                forward_rt=True)
             wiring.connect(m, serialrx.o, midi_decode_trs.i)
 
-            # USB MIDI host (experimental)
+            # USB MIDI host
             ulpi = platform.request(platform.default_usb_connection)
             m.submodules.usb = usb = USBMIDIHost(
                     bus=ulpi,
             )
-            m.submodules.midi_decode_usb = midi_decode_usb = midi.MidiDecodeUSB()
+            m.submodules.midi_decode_usb = midi_decode_usb = midi.MidiDecodeUSB(
+                forward_rt=True)
             wiring.connect(m, usb.o_midi, midi_decode_usb.i)
 
             # Only enable VBUS if MIDI HOST is enabled.
@@ -586,10 +588,30 @@ class PolySoc(TiliquaSoc):
                 wiring.connect(m, midi_decode_trs.o, self.synth_periph.i_midi)
                 m.d.comb += vbus_o.eq(0)
 
+            # Route RT messages from the active MIDI source to clock divider.
+            # Drain the inactive source, connect the active one.
+            with m.If(self.synth_periph.usb_midi_host):
+                wiring.connect(m, midi_decode_usb.o_rt, clock_div.i)
+                m.d.comb += midi_decode_trs.o_rt.ready.eq(1)
+            with m.Else():
+                wiring.connect(m, midi_decode_trs.o_rt, clock_div.i)
+                m.d.comb += midi_decode_usb.o_rt.ready.eq(1)
+
         # polysynth audio + jack detection
         wiring.connect(m, pmod0.o_cal, polysynth.i)
-        wiring.connect(m, polysynth.o, pmod0.i_cal)
         m.d.comb += polysynth.jack.eq(pmod0.jack)
+
+        m.d.comb += [
+            pmod0.i_cal.payload[0].eq(polysynth.o.payload[0]),
+            # Channel 1 is MIDI clock square wave (0 / 0.5).
+            pmod0.i_cal.payload[1].eq(
+                Mux(clock_div.o, fixed.Const(0.5, shape=ASQ), 0)),
+            # Channel 2/3 are stereo outputs
+            pmod0.i_cal.payload[2].eq(polysynth.o.payload[2]),
+            pmod0.i_cal.payload[3].eq(polysynth.o.payload[3]),
+            pmod0.i_cal.valid.eq(polysynth.o.valid),
+            polysynth.o.ready.eq(pmod0.i_cal.ready),
+        ]
 
         # Upsample channels 0/1 before vectorscope
         fs = self.clock_settings.audio_clock.fs()

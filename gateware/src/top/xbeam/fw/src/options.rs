@@ -68,6 +68,18 @@ pub enum GridOverlay {
     Cross,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
+#[strum(serialize_all = "kebab-case")]
+pub enum XZoom {
+    #[strum(serialize = "0.5x")]
+    Half,
+    #[default]
+    #[strum(serialize = "1x")]
+    Normal,
+    #[strum(serialize = "2x")]
+    Double,
+}
+
 int_params!(DelayParams<u16>      { step: 8, min: 0, max: 512, format: IntFormat::Scaled { divisor: AUDIO_FS / 1000, precision: 1, suffix: "ms" } });
 int_params!(PCScaleParams<u8>     { step: 1, min: 0, max: 15 });
 int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
@@ -173,6 +185,8 @@ pub struct ScopeOpts2 {
     pub yscale: EnumOption<VScale>,
     #[option]
     pub timebase: EnumOption<Timebase>,
+    #[option]
+    pub xzoom: EnumOption<XZoom>,
     #[option]
     pub trig_mode: EnumOption<TriggerMode>,
     #[option]

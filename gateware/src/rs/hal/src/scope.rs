@@ -55,6 +55,13 @@ macro_rules! impl_scope {
                 };
             }
 
+            pub fn set_xscale(&mut self, scale: u8) {
+                self.xscale = scale;
+                let ppv = self.registers.pixels_per_volt().read().pixels_per_volt().bits() as u32;
+                self.px_div_x = ppv >> scale;
+                self.registers.xscale().write(|w| unsafe { w.xscale().bits(scale) });
+            }
+
             pub fn set_xpos_px(&mut self, pos: i16) {
                 self.registers.xpos().write(|w| unsafe { w.xpos().bits(pos as u16) });
             }

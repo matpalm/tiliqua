@@ -23,7 +23,7 @@ use tiliqua_hal::persist::Persist;
 use tiliqua_fw::*;
 use tiliqua_fw::options::*;
 use opts::{Options, OptionTrait};
-use opts::cc_map::{MidiCcMapper, CcMapMode, CcAction};
+use opts::cc_map::{MidiCcMapper, CcMapMode};
 use tiliqua_hal::pmod::EurorackPmod;
 
 use tiliqua_hal::embedded_graphics::prelude::*;
@@ -63,6 +63,7 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         //  the FIFO contents for debugging purposes)
         //
 
+        let mut last_cc_index = None;
         let midi_word = app.synth.midi_read();
         if midi_word != 0 {
             // Blink MIDI activity LED on TRS port
@@ -76,8 +77,8 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
             if let Ok(msg) = MidiMessage::try_parse_slice(&bytes) {
                 if let MidiMessage::ControlChange(_, cc, val) = msg {
                     if let Some(action) = app.cc_mapper.process(cc.into(), val.into()) {
+                        last_cc_index = Some(action.global_index);
                         apply_cc_action(&mut app.ui.opts, &action);
-                        app.ui.external_modify();
                     }
                 }
             }
@@ -89,16 +90,20 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
             }
         }
 
+        // Highlight the last CC-modified option (once per cycle)
+        if opts.misc.cc_highlight.value == CcHighlight::On {
+            if let Some(idx) = last_cc_index {
+                app.ui.opts.select_global(idx);
+                app.ui.external_modify();
+            }
+        }
+
         //
         // Update synthesizer
         //
 
-        let jack = app.ui.pmod.jack();
         let drive_smooth = app.drive_smoother.proc_u16(opts.effect.drive.value);
-        // Skip drive CSR write when jack 2 is patched
-        if (jack & (1 << 2)) == 0 {
-            app.synth.set_drive(drive_smooth);
-        }
+        app.synth.set_drive(drive_smooth);
 
         // Map 0-1 UI range to 32768-8192 hardware range (inverted)
         let reso_ui = opts.voice.reso.value as u32;
@@ -158,6 +163,11 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
             app.ui.touch_led_mask(0b00111111);
             let touch = app.ui.pmod.touch();
             let jack = app.ui.pmod.jack();
+
+            // Output 1 (jack 5): auto mode when plugged (shows clock from DAC)
+            if (jack & (1 << 5)) != 0 {
+                app.ui.pmod.led_set_auto(5);
+            }
             let msgs = app.touch_controller.update(&touch, jack);
             for msg in msgs {
                 if msg != MidiMessage::Stop {
@@ -175,41 +185,40 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
     });
 }
 
-fn apply_cc_action(opts: &mut Opts, action: &CcAction<Page>) {
-    opts.tracker.page.value = action.page;
-    let index = opts.view().options().iter()
-        .position(|opt| opt.key().value() == action.option_key);
-    if let Some(i) = index {
-        opts.set_selected(Some(i));
-        let opt = &mut opts.view_mut().options_mut()[i];
+fn global_index(opts: &Opts, opt: &dyn OptionTrait) -> usize {
+    let key = opt.key().value();
+    opts.all().enumerate()
+        .find(|(_, o)| o.key().value() == key)
+        .expect("cc_map: option key not found").0
+}
+
+fn apply_cc_action(opts: &mut Opts, action: &opts::cc_map::CcAction) {
+    if let Some(opt) = opts.all_mut().nth(action.global_index) {
         match action.mode {
             CcMapMode::Absolute => { opt.set_from_cc(action.cc_value); }
-            CcMapMode::Decrement => { opt.tick_down(); }
-            CcMapMode::Increment => { opt.tick_up(); }
         }
     }
 }
 
-fn build_cc_mapper(opts: &Opts) -> MidiCcMapper<Page, 16> {
+fn build_cc_mapper(opts: &Opts) -> MidiCcMapper {
     let mut m = MidiCcMapper::new();
     // Effect page
-    m.add(74, Page::Effect, opts.effect.drive.key().value(),   CcMapMode::Absolute);
-    m.add(71, Page::Voice, opts.voice.reso.key().value(),     CcMapMode::Absolute);
-    m.add(17, Page::Effect, opts.effect.diffuse.key().value(), CcMapMode::Absolute);
-    // Osc page
-    m.add(22, Page::Voice, opts.voice.waveform.key().value(), CcMapMode::Decrement);
-    m.add(23, Page::Voice, opts.voice.waveform.key().value(), CcMapMode::Increment);
-    m.add(24, Page::Voice, opts.voice.proc.key().value(),     CcMapMode::Decrement);
-    m.add(25, Page::Voice, opts.voice.proc.key().value(),     CcMapMode::Increment);
-    m.add(93, Page::Voice, opts.voice.proc_amt.key().value(), CcMapMode::Absolute);
-    // Voice page LFO
-    m.add(76, Page::Voice, opts.voice.lfo_depth.key().value(), CcMapMode::Absolute);
-    m.add(77, Page::Voice, opts.voice.lfo_rate.key().value(),  CcMapMode::Absolute);
+    m.add(74, global_index(opts, &opts.effect.drive),    CcMapMode::Absolute);
+    m.add(17, global_index(opts, &opts.effect.diffuse),  CcMapMode::Absolute);
+    // Voice page
+    m.add(71, global_index(opts, &opts.voice.reso),      CcMapMode::Absolute);
+    m.add(22, global_index(opts, &opts.voice.waveform),  CcMapMode::Absolute);
+    m.add(24, global_index(opts, &opts.voice.proc),      CcMapMode::Absolute);
+    m.add(93, global_index(opts, &opts.voice.proc_amt),  CcMapMode::Absolute);
+    m.add(76, global_index(opts, &opts.voice.lfo_depth), CcMapMode::Absolute);
+    m.add(77, global_index(opts, &opts.voice.lfo_rate),  CcMapMode::Absolute);
     // ADSR page
-    m.add(73, Page::Adsr, opts.adsr.attack.key().value(),  CcMapMode::Absolute);
-    m.add(75, Page::Adsr, opts.adsr.decay.key().value(),   CcMapMode::Absolute);
-    m.add(79, Page::Adsr, opts.adsr.sustain.key().value(), CcMapMode::Absolute);
-    m.add(72, Page::Adsr, opts.adsr.release.key().value(), CcMapMode::Absolute);
+    m.add(73, global_index(opts, &opts.adsr.attack),  CcMapMode::Absolute);
+    m.add(75, global_index(opts, &opts.adsr.decay),   CcMapMode::Absolute);
+    m.add(79, global_index(opts, &opts.adsr.sustain), CcMapMode::Absolute);
+    m.add(72, global_index(opts, &opts.adsr.release), CcMapMode::Absolute);
+    // Beam page
+    m.add(80, global_index(opts, &opts.beam.palette),  CcMapMode::Absolute);
     m
 }
 
@@ -225,7 +234,7 @@ struct App {
     last_proc_mode: ProcMode,
     last_proc_amt: u16,
     // midi cc mapper
-    cc_mapper: MidiCcMapper<Page, 16>,
+    cc_mapper: MidiCcMapper,
     // lfo phase accumulator
     lfo_phase: wavetable::Fix32,
 }
@@ -429,12 +438,14 @@ fn main() -> ! {
                                 &bootinfo.manifest.name, &bootinfo.manifest.tag, &modeline).ok();
                 if opts.tracker.page.value == Page::Adsr {
                     use draw::AdsrPhase;
-                    let highlight = opts.selected().and_then(|i| match i {
-                        0 => Some(AdsrPhase::Attack),
-                        1 => Some(AdsrPhase::Decay),
-                        2 => Some(AdsrPhase::Sustain),
-                        3 => Some(AdsrPhase::Release),
-                        _ => None,
+                    let highlight = opts.selected().and_then(|i| {
+                        match opts.view().options()[i].key().value() {
+                            v if v == opts.adsr.attack.key().value()  => Some(AdsrPhase::Attack),
+                            v if v == opts.adsr.decay.key().value()   => Some(AdsrPhase::Decay),
+                            v if v == opts.adsr.sustain.key().value() => Some(AdsrPhase::Sustain),
+                            v if v == opts.adsr.release.key().value() => Some(AdsrPhase::Release),
+                            _ => None,
+                        }
                     });
                     draw::draw_adsr(&mut display,
                         h_active/2-190, 75,

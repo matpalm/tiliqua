@@ -68,6 +68,14 @@ pub enum UsbMidiSerialDebug {
     On,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
+#[strum(serialize_all = "kebab-case")]
+pub enum CcHighlight {
+    Off,
+    #[default]
+    On,
+}
+
 int_params!(PageNumParams<u16>    { step: 1, min: 0, max: 0 });
 int_params!(ProcAmtParams<u16>   { step: 1, min: 0, max: 50, format: IntFormat::Scaled { divisor: 10, precision: 1, suffix: "" } });
 int_params!(DriveParams<u16>    { step: 2048, min: 0, max: 32768, format: IntFormat::Scaled { divisor: 32768, precision: 2, suffix: "" } });
@@ -147,6 +155,8 @@ pub struct BeamOpts {
 pub struct MiscOpts {
     #[option]
     pub touch_ctrl: EnumOption<TouchControl>,
+    #[option]
+    pub cc_highlight: EnumOption<CcHighlight>,
     #[option]
     pub usb_host: EnumOption<UsbHost>,
     #[option]

@@ -93,6 +93,17 @@ where
         T::iter().count()
     }
 
+    fn set_from_cc(&mut self, cc: u8) -> bool {
+        let count = T::iter().count();
+        let index = (cc as usize * count) / 128;
+        if let Some(v) = T::iter().nth(index) {
+            self.value = v;
+            true
+        } else {
+            false
+        }
+    }
+
     fn encode(&self, buf: &mut [u8]) -> Option<usize> {
         use postcard::to_slice;
         if self.value != self.init {

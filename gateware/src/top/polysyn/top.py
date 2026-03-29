@@ -84,10 +84,8 @@ The following MIDI CC mappings are supported:
         ──  ─────────       ────
          1  mod wheel       filter cutoff
         64  sustain pedal   hold voices
-        22  waveform        prev
-        23  waveform        next
-        24  proc mode       prev
-        25  proc mode       next
+        22  waveform        absolute
+        24  proc mode       absolute
         93  proc amount     absolute
         71  resonance       absolute
         76  lfo depth       absolute
@@ -98,6 +96,7 @@ The following MIDI CC mappings are supported:
         72  release         absolute
         74  drive           absolute
         17  diffuse         absolute
+        14  palette         absolute
 
     Pitch bend is also supported.
 

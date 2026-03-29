@@ -66,6 +66,10 @@ pub trait Options {
     fn page_mut(&mut self) -> &mut dyn OptionTrait;
     fn all_mut(&mut self) -> impl Iterator<Item = &mut dyn OptionTrait>;
 
+    /// Switch to the page containing the option at `global_index` (index into
+    /// the `all()` iterator) and select it. Returns `true` if the index was valid.
+    fn select_global(&mut self, global_index: usize) -> bool;
+
     /// Validates that all option keys are unique (no key collisions)
     /// Returns Err with the colliding key if any duplicates are found
     fn validate_keys_panic_on_failure(&self) {

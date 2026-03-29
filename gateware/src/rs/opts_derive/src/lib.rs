@@ -177,6 +177,7 @@ pub fn page_derive(input: TokenStream) -> TokenStream {
     });
 
     let page_field_names: Vec<_> = page_fields.iter().map(|(field_name, _)| field_name).collect();
+    let page_values: Vec<_> = page_fields.iter().map(|(_, page_value)| page_value).collect();
 
     // Generate parent keys for each page field
     let page_key_assignments = page_fields.iter().map(|(field_name, _page_value)| {
@@ -257,6 +258,22 @@ pub fn page_derive(input: TokenStream) -> TokenStream {
                 [
                     #(self.#page_field_names.options_mut()),*
                 ].into_iter().flatten()
+            }
+
+            fn select_global(&mut self, global_index: usize) -> bool {
+                let mut offset = 0usize;
+                #(
+                    {
+                        let len = self.#page_field_names.options().len();
+                        if global_index < offset + len {
+                            self.tracker.page.value = #page_values;
+                            self.tracker.selected = Some(global_index - offset);
+                            return true;
+                        }
+                        offset += len;
+                    }
+                )*
+                false
             }
         }
     };

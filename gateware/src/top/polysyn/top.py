@@ -32,9 +32,10 @@ the menu system (MISC page).
 
     - When a jack is patched into input 0, 1 or 2, CV can be used to modulate
       all voices simultaneously up to audio rate (phase mod, filter cutoff and
-      drive). Patch an LFO into phase CV for retro 'tape-wow' like detuning.
-      Patch an oscillator into phase CV for FM effects, or into drive for AM
-      effect.
+      drive). Inputs 1 and 2 act as bipolar offsets on top of the existing
+      envelope / knob value. Patch an LFO into phase CV for retro 'tape-wow'
+      like detuning. Patch an oscillator into phase CV for FM effects, or into
+      drive for AM effect.
 
 Each voice is hard panned left or right in the stereo field, with 2 end-of-chain
 effects: distortion and diffusion (delay), both of which can be mixed in with
@@ -226,34 +227,27 @@ class PolySynth(wiring.Component):
         m.d.comb += voice_block.phase_mod.eq(
             Mux(self.jack[0], cv[0], lfo_lpf.o.payload))
 
-        # CV 1: velocity_mod override (when jack 1 patched)
-        cv1_u8 = Signal(unsigned(8))
-        with m.If(cv[1].as_value()[-1]):
-            m.d.comb += cv1_u8.eq(0)
-        with m.Else():
-            m.d.comb += cv1_u8.eq(cv[1].as_value() >> 7)
-
-        # CV 2: drive VCA gain (when jack 2 patched)
-        cv2_u16 = Signal(unsigned(16))
-        with m.If(cv[2].as_value()[-1]):
-            m.d.comb += cv2_u16.eq(0)
-        with m.Else():
-            m.d.comb += cv2_u16.eq(cv[2].as_value() << 1)
-
-        drive_val = Signal(unsigned(18))
-        m.d.comb += drive_val.eq(
-            Mux(self.jack[2], cv2_u16, self.drive << 2))
+        # CV 2: drive bipolar offset (when jack 2 patched)
+        SQDrive = dsp.mac.SQNative  # SQ(3, 15)
+        drive_base = Signal(SQDrive)
+        m.d.comb += drive_base.as_value().eq(self.drive << 2)
+        drive_sum = drive_base + cv[2]
+        drive_val = Signal(SQDrive)
+        m.d.comb += drive_val.eq(drive_sum.saturate(SQDrive))
 
         # per-voice params
         for n in range(n_voices):
+            # CV 1: filter envelope bipolar offset (when jack 1 patched)
+            vel_base = fixed.UQ(0, 8)(voice_tracker.o[n].velocity_mod)
+            vel_sum = vel_base + cv[1]
+            vel_out = Signal(dsp.MultiADSR.EnvUQ, name=f"vel_out_{n}")
+            m.d.comb += vel_out.eq(vel_sum.saturate(dsp.MultiADSR.EnvUQ))
             m.d.comb += [
                 self.voice_states[n].eq(voice_tracker.o[n]),
                 self.voice_cutoffs[n].eq(voice_block.voice_cutoffs[n]),
                 voice_block.voice_gates[n].eq(voice_tracker.o[n].gate),
                 voice_block.voice_freq_incs[n].eq(voice_tracker.o[n].freq_inc),
-                voice_block.voice_velocity[n].as_value().eq(
-                    Mux(self.jack[1], cv1_u8,
-                        voice_tracker.o[n].velocity_mod) << 8),
+                voice_block.voice_velocity[n].eq(vel_out),
                 voice_tracker.voice_active[n].eq(voice_block.voice_active[n]),
             ]
 

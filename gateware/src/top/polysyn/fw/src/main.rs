@@ -104,10 +104,7 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
 
         let jack = app.ui.pmod.jack();
         let drive_smooth = app.drive_smoother.proc_u16(opts.effect.drive.value);
-        // Skip drive CSR write when jack 2 is patched
-        if (jack & (1 << 2)) == 0 {
-            app.synth.set_drive(drive_smooth);
-        }
+        app.synth.set_drive(drive_smooth);
 
         // Map 0-1 UI range to 32768-8192 hardware range (inverted)
         let reso_ui = opts.voice.reso.value as u32;

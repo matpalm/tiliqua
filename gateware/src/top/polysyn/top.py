@@ -97,7 +97,7 @@ The following MIDI CC mappings are supported:
         72  release         absolute
         74  drive           absolute
         17  diffuse         absolute
-        14  palette         absolute
+        80  palette         absolute
 
     Pitch bend is also supported.
 
@@ -503,7 +503,7 @@ class PolySoc(TiliquaSoc):
     # Stored in manifest and used by bootloader for brief summary of each bitstream.
     bitstream_help = BitstreamHelp(
         brief="Touch+MIDI Polysynth (8-voice)",
-        io_left=['phase cv / touch', 'filter cv / touch', 'drive cv / touch', 'touch3', 'touch4', 'touch5', 'out L', 'out R'],
+        io_left=['phase cv / touch', 'filter cv / touch', 'drive cv / touch', 'touch', 'touch', 'clk / touch', 'out L', 'out R'],
         io_right=['navigate menu', 'MIDI host', 'video out', '', '', 'TRS MIDI in']
     )
 

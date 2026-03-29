@@ -102,7 +102,6 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         // Update synthesizer
         //
 
-        let jack = app.ui.pmod.jack();
         let drive_smooth = app.drive_smoother.proc_u16(opts.effect.drive.value);
         app.synth.set_drive(drive_smooth);
 
@@ -219,7 +218,7 @@ fn build_cc_mapper(opts: &Opts) -> MidiCcMapper {
     m.add(79, global_index(opts, &opts.adsr.sustain), CcMapMode::Absolute);
     m.add(72, global_index(opts, &opts.adsr.release), CcMapMode::Absolute);
     // Beam page
-    m.add(14, global_index(opts, &opts.beam.palette),  CcMapMode::Absolute);
+    m.add(80, global_index(opts, &opts.beam.palette),  CcMapMode::Absolute);
     m
 }
 

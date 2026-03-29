@@ -86,7 +86,7 @@ class Ramp(wiring.Component):
         with m.If(self.i.valid & self.o.ready):
             with m.If(self.o.payload > fixed.Const(0.985, shape=self.shape)):
                 with m.If(self.i.payload.trigger):
-                    m.d.sync += s.eq(self.shape.min() << self.shift)
+                    m.d.sync += s.eq(fixed.Const(-1.0, shape=self.shape, clamp=True) << self.shift)
             with m.Else():
                 m.d.sync += s.eq(s + self.i.payload.td)
 

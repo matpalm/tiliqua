@@ -78,6 +78,62 @@ lines, USB streams).  Some usage ideas:
         computer, however it is only part of the signal flow if
         ``usb_mode=enabled`` in the menu system.
 
+The following options are tweakable in the menu. Note that the MIDI TRS input
+can also be used to control most of these through CCs as follows:
+
+    .. code-block:: text
+
+        Page    Parameter     CC  Description
+        ────    ─────────     ──  ───────────
+        HELP    scroll         -  scroll help text up/down
+
+                                  (Hint: to hide HELP page --
+                                   use 'MISC: help' below)
+
+        VECTOR  x-offset      20  in0 (horizontal deflection) offset
+        VECTOR  x-scale       21  in0 (horizontal deflection) volts/div
+        VECTOR  y-offset      22  in1 (vertical deflection) offset
+        VECTOR  y-scale       23  in1 (vertical deflection) volts/div
+        VECTOR  i-offset      24  in2 (beam intensity) offset
+        VECTOR  i-scale       25  in2 (beam intensity CV) scale
+        VECTOR  c-offset      26  in3 (beam color) offset
+        VECTOR  c-scale       27  in4 (beam color CV) scale
+
+        DELAY   delay-x       30  in0/X channel delayline length
+        DELAY   delay-y       31  in1/Y channel delayline length
+        DELAY   delay-i       32  in2/intensity delayline length
+        DELAY   delay-c       33  in3/color delayline length
+
+        BEAM    persist       40  phosphor decay speed (high = slow)
+        BEAM    decay         41  phosphor decay amount (low = slow)
+        BEAM    ui-hue        42  menu and grid overlay hue
+        BEAM    palette       43  color palette
+        BEAM    grid          44  grid overlay style
+        BEAM    grid-i        45  grid overlay intensity
+
+        MISC    plot-type     50  vectorscope or oscilloscope
+        MISC    plot-src      51  plot inputs or outputs
+        MISC    usb-mode       -  enable/bypass USB audio
+        MISC    rotation      52  screen rotation
+        MISC    help           -  show/hide leftmost help page
+        MISC    cc-highlight   -  highlight changed on CC input
+        MISC    save-opts      -  save all options to flash
+        MISC    wipe-opts      -  reset all options to defaults
+
+        SCOPE1  ypos0         60  channel 0 vertical position
+        SCOPE1  ypos1         61  channel 1 vertical position
+        SCOPE1  ypos2         62  channel 2 vertical position
+        SCOPE1  ypos3         63  channel 3 vertical position
+        SCOPE1  n-channels    64  number of active channels
+
+        SCOPE2  yscale        70  vertical volts/div
+        SCOPE2  timebase      71  horizontal time/div
+        SCOPE2  xzoom         72  horizontal zoom
+        SCOPE2  trig-mode     73  trigger mode
+        SCOPE2  trig-lvl      74  trigger level
+        SCOPE2  intensity     75  trace intensity
+        SCOPE2  hue           76  trace color
+
     .. note::
 
         By default, this core builds for ``48kHz/16bit`` sampling.  However,
@@ -94,10 +150,11 @@ import sys
 
 from amaranth import *
 from amaranth.lib import data, stream, wiring
+from amaranth.lib.fifo import SyncFIFOBuffered
 from amaranth.lib.wiring import In, Out, connect, flipped
 from amaranth_soc import csr
 
-from tiliqua import dsp, usb_audio
+from tiliqua import dsp, midi, usb_audio
 from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
@@ -118,6 +175,9 @@ class XbeamPeripheral(wiring.Component):
     class Delay(csr.Register, access="w"):
         value:   csr.Field(csr.action.W, unsigned(16))
 
+    class MidiRead(csr.Register, access="r"):
+        msg: csr.Field(csr.action.R, unsigned(32))
+
     def __init__(self):
         regs = csr.Builder(addr_width=5, data_width=8)
         self._flags = regs.add("flags", self.Flags(), offset=0x0)
@@ -125,6 +185,7 @@ class XbeamPeripheral(wiring.Component):
         self._delay1 = regs.add("delay1", self.Delay(), offset=0x8)
         self._delay2 = regs.add("delay2", self.Delay(), offset=0xC)
         self._delay3 = regs.add("delay3", self.Delay(), offset=0x10)
+        self._midi_read = regs.add("midi_read", self.MidiRead(), offset=0x14)
         self._bridge = csr.Bridge(regs.as_memory_map())
         super().__init__({
             "usb_en": Out(1),
@@ -135,6 +196,9 @@ class XbeamPeripheral(wiring.Component):
             # Streams in/out of plotting delay lines
             "delay_i": In(stream.Signature(data.ArrayLayout(eurorack_pmod.ASQ, 4))),
             "delay_o": Out(stream.Signature(data.ArrayLayout(eurorack_pmod.ASQ, 4))),
+
+            # TRS MIDI input
+            "i_midi": In(stream.Signature(midi.MidiMessage)),
         })
         self.bus.memory_map = self._bridge.bus.memory_map
 
@@ -172,6 +236,20 @@ class XbeamPeripheral(wiring.Component):
             field = getattr(self, f'_delay{ch}')
             with m.If(field.f.value.w_stb):
                 m.d.sync += delay[ch].eq(field.f.value.w_data)
+
+        # TRS MIDI -> SoC read FIFO
+        m.submodules.read_midi_fifo = read_midi_fifo = SyncFIFOBuffered(
+            width=24, depth=8)
+        m.d.comb += [
+            self.i_midi.ready.eq(1),
+            read_midi_fifo.w_data.eq(self.i_midi.payload),
+            read_midi_fifo.w_en.eq(self.i_midi.valid),
+            read_midi_fifo.r_en.eq(self._midi_read.element.r_stb),
+        ]
+        with m.If(read_midi_fifo.r_level != 0):
+            m.d.comb += self._midi_read.f.msg.r_data.eq(read_midi_fifo.r_data)
+        with m.Else():
+            m.d.comb += self._midi_read.f.msg.r_data.eq(0)
 
         return m
 
@@ -259,6 +337,14 @@ class XbeamSoc(TiliquaSoc):
                     audio_clock=self.clock_settings.audio_clock, nr_channels=4)
             # SoC-controlled USB PHY connection (based on typeC CC status)
             m.d.comb += usbif.usb_connect.eq(self.xbeam_periph.usb_connect)
+
+            # TRS MIDI
+            midi_pins = platform.request("midi")
+            m.submodules.serialrx = serialrx = midi.SerialRx(
+                    system_clk_hz=60e6, pins=midi_pins)
+            m.submodules.midi_decode = midi_decode = midi.MidiDecodeSerial()
+            wiring.connect(m, serialrx.o, midi_decode.i)
+            wiring.connect(m, midi_decode.o, self.xbeam_periph.i_midi)
 
         with m.If(self.xbeam_periph.usb_en):
             if sim.is_hw(platform):

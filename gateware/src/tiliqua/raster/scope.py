@@ -246,6 +246,7 @@ class ScopePeripheral(wiring.Component):
             wiring.connect(m, rampsplit4.o[ch], ch_merge4.i[0])
             wiring.connect(m, self.isplit4.o[ch], ch_merge4.i[1])
 
+
         # Wishbone tweakables
 
         with m.If(self._flags.f.trigger_always.w_stb):

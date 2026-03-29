@@ -18,6 +18,7 @@ use tiliqua_hal::embedded_graphics::prelude::*;
 use options::*;
 use opts::persistence::*;
 use hal::pca9635::Pca9635Driver;
+use tiliqua_hal::dma_framebuffer::Rotate;
 use tiliqua_hal::tusb322::{TUSB322Driver, TUSB322Mode, AttachedState};
 use tiliqua_hal::persist::Persist;
 
@@ -143,19 +144,12 @@ fn main() -> ! {
 
         let mut usb_cc_attached = false;
 
-        // Grid overlay configuration (ppd is constant after init)
-        let (ppd_x, ppd_y) = vscope.pixels_per_div();
-        overlay_periph.grid_spacing().write(|w| unsafe {
-            w.spacing_x().bits(ppd_x as u8);
-            w.spacing_y().bits(ppd_y as u8)
-        });
-        overlay_periph.grid_start().write(|w| unsafe {
-            w.start_x().bits(((display.size().width / 2) % ppd_x) as u8);
-            w.start_y().bits((((display.size().height / 2) + 1) % ppd_y) as u8)
-        });
+        // Grid overlay operates in DVI pixel space (pre-rotation)
+        let dvi_w = modeline.h_active as u32;
+        let dvi_h = modeline.v_active as u32;
         overlay_periph.grid_offset().write(|w| unsafe {
-            w.offset_x().bits((display.size().width / 2) as u16);
-            w.offset_y().bits((display.size().height / 2) as u16)
+            w.offset_x().bits((dvi_w / 2) as u16);
+            w.offset_y().bits((dvi_h / 2) as u16)
         });
 
         loop {
@@ -235,8 +229,14 @@ fn main() -> ! {
             scope.set_intensity(opts.scope2.intensity.value);
             scope.set_trigger_level(opts.scope2.trig_lvl.value);
             scope.set_yscale(opts.scope2.yscale.value);
+            let xscale_bits: u8 = match opts.scope2.xzoom.value {
+                XZoom::Half   => 7,
+                XZoom::Normal => 6,
+                XZoom::Double => 5,
+            };
+            scope.set_xscale(xscale_bits);
             scope.set_timebase(opts.scope2.timebase.value);
-            let (_, sppd) = scope.pixels_per_div();
+            let (sppd_x, sppd) = scope.pixels_per_div();
             let n_ch = opts.scope1.n_channels.value;
             let ypos = [opts.scope1.ypos0.value, opts.scope1.ypos1.value,
                          opts.scope1.ypos2.value, opts.scope1.ypos3.value];
@@ -267,6 +267,29 @@ fn main() -> ! {
                       w.show_outputs().bit(opts.misc.plot_src.value == PlotSrc::Outputs);
                       w.usb_connect().bit(usb_cc_attached)
                 } );
+
+            // Update grid spacing. In scope mode use the scope's ppd_x for the
+            // time axis. In portrait rotation the time/signal axes are swapped
+            // relative to DVI x/y.
+            let (scope_ppd_time, scope_ppd_sig) = if opts.misc.plot_type.value == PlotType::Scope {
+                (sppd_x, ppd_y)
+            } else {
+                (ppd_x, ppd_y)
+            };
+            let is_portrait = matches!(opts.misc.rotation.value, Rotate::Left | Rotate::Right);
+            let (dvi_ppd_x, dvi_ppd_y) = if is_portrait {
+                (scope_ppd_sig, scope_ppd_time)
+            } else {
+                (scope_ppd_time, scope_ppd_sig)
+            };
+            overlay_periph.grid_spacing().write(|w| unsafe {
+                w.spacing_x().bits(dvi_ppd_x as u8);
+                w.spacing_y().bits(dvi_ppd_y as u8)
+            });
+            overlay_periph.grid_start().write(|w| unsafe {
+                w.start_x().bits(((dvi_w / 2) % dvi_ppd_x) as u8);
+                w.start_y().bits((((dvi_h / 2) + 1) % dvi_ppd_y) as u8)
+            });
 
             // Grid overlay style/pixel (changes with options)
             let grid_style: u8 = if on_help_page { 0 } else {

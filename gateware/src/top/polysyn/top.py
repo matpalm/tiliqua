@@ -77,33 +77,51 @@ the wavetable **before** it hits the voice filter. When no CV is patched
 into input 0, a built-in sine LFO modulates the phase of all voices
 (rate and depth are adjustable on the VOICE page).
 
-The following MIDI CC mappings are supported:
-
-    .. code-block:: text
-
-        CC  Parameter       Mode
-        ──  ─────────       ────
-         1  mod wheel       filter cutoff
-        64  sustain pedal   hold voices
-        22  waveform        absolute
-        24  proc mode       absolute
-        93  proc amount     absolute
-        71  resonance       absolute
-        76  lfo depth       absolute
-        77  lfo rate        absolute
-        73  attack          absolute
-        75  decay           absolute
-        79  sustain         absolute
-        72  release         absolute
-        74  drive           absolute
-        17  diffuse         absolute
-        80  palette         absolute
-
-    Pitch bend is also supported.
-
 If a MIDI clock is present on TRS or USB MIDI, it is divided by 24 (1PPQN)
 and sent out on output jack 1. STOP/START/CONTINUE is respected. The LED
 will pulse with the clock ONLY if that jack is connected.
+
+The following options are tweakable in the menu. Note that the USB/TRS MIDI
+can also be used to control most of these through CCs as follows:
+
+    .. code-block:: text
+
+        Page    Parameter     CC  Description
+        ────    ─────────     ──  ───────────
+        HELP    scroll         -  scroll help text up/down
+
+        VOICE   waveform      20  wavetable selection
+        VOICE   proc          21  wavetable processing mode
+        VOICE   proc-amt      22  wavetable processing amount
+        VOICE   reso          23  filter resonance
+        VOICE   lfo-rate      24  phase modulation LFO rate
+        VOICE   lfo-depth     25  phase modulation LFO depth
+
+        ADSR    attack        30  filter envelope attack
+        ADSR    decay         31  filter envelope decay
+        ADSR    sustain       32  filter envelope sustain
+        ADSR    release       33  filter envelope release
+
+        EFFECT  drive         40  distortion amount
+        EFFECT  diffuse       41  diffusion wet/dry mix
+
+        BEAM    scale         50  vectorscope volts/div
+        BEAM    persist       51  phosphor decay speed (high = slow)
+        BEAM    decay         52  phosphor decay amount (low = slow)
+        BEAM    intensity     53  trace intensity
+        BEAM    hue           54  trace and menu hue
+        BEAM    palette       55  color palette
+
+        MISC    touch-ctrl     -  enable/disable jacktouch input
+        MISC    cc-highlight   -  highlight changed on CC input
+        MISC    usb-host       -  enable USB host MIDI (disables TRS)
+        MISC    serial-debug   -  dump MIDI data out serial port
+        MISC    save-opts      -  save all options to flash
+        MISC    wipe-opts      -  reset all options to defaults
+
+    MIDI CC 1 (mod wheel) controls filter cutoff. CC 64 (sustain
+    pedal) holds voices. Pitch bend is also supported.
+
 """
 
 import math

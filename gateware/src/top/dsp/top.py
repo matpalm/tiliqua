@@ -1145,19 +1145,45 @@ class MidiMatrixMixer(wiring.Component):
     are used as matrix coefficients and smoothed at audio rate.
 
     Soft saturation is applied to the 4 output channels, to
-    improve re sults when output amplitude is close to clipping.
+    improve results when output amplitude is close to clipping.
 
-    Any MIDI CC can be assigned to any coefficient.
+    The following MIDI CCs control the mixer gain coefficients:
+
+    .. code-block:: text
+
+        CC  Description
+        ──  ───────────
+        20  in0 -> out0 gain
+        21  in0 -> out1 gain
+        22  in0 -> out2 gain
+        23  in0 -> out3 gain
+
+        30  in1 -> out0 gain
+        31  in1 -> out1 gain
+        32  in1 -> out2 gain
+        33  in1 -> out3 gain
+
+        40  in2 -> out0 gain
+        41  in2 -> out1 gain
+        42  in2 -> out2 gain
+        43  in2 -> out3 gain
+
+        50  in3 -> out0 gain
+        51  in3 -> out1 gain
+        52  in3 -> out2 gain
+        53  in3 -> out3 gain
+
+    CC values are audio-tapered (x^2) and smoothed at audio rate.
     """
 
     # None == listen to all midi channels
     MIDI_CHANNEL = None
 
     # Which MIDI CC controls which mixer coefficient?
-    CCS = [73, 75, 79, 72,
-           81, 82, 83, 85,
-           67, 68, 69, 70,
-           88, 89, 90, 92]
+    CCS = [20, 21, 22, 23,
+           30, 31, 32, 33,
+           40, 41, 42, 43,
+           50, 51, 52, 53]
 
     # Smoothing constant (~10ms @ 48kHz)
     SMOOTH_BETA = 0.9979

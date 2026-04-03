@@ -87,7 +87,7 @@ int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
 int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
-int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 80 });
+int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 125 });
 int_params!(LfoRateParams<u16>   { step: 2, min: 0, max: 50, format: IntFormat::Scaled { divisor: 10, precision: 1, suffix: "hz" } });
 int_params!(LfoDepthParams<u16>  { step: 2048, min: 0, max: 32768, format: IntFormat::Scaled { divisor: 32768, precision: 2, suffix: "" } });
 

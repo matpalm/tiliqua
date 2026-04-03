@@ -96,7 +96,7 @@ int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
 int_params!(TriggerLvlParams<i16> { step: 500, min: -16000, max: 16000, format: IntFormat::Scaled { divisor: 4000, precision: 2, suffix: "V" } });
 int_params!(PosParams<i16>       { step: 1, min: -40, max: 40, format: IntFormat::Scaled { divisor: 4, precision: 2, suffix: "d" } });
-int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 100 });
+int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 125 });
 int_params!(NChannelsParams<u8>   { step: 1, min: 1, max: 4 });
 
 button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });

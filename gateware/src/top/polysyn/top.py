@@ -106,8 +106,8 @@ can also be used to control most of these through CCs as follows:
         EFFECT  diffuse       41  diffusion wet/dry mix
 
         BEAM    scale         50  vectorscope volts/div
-        BEAM    persist       51  phosphor decay speed (high = slow)
-        BEAM    decay         52  phosphor decay amount (low = slow)
+        BEAM    persist       51  phosphor persistence (high = slow)
+                               -  (CC 52 deprecated)
         BEAM    intensity     53  trace intensity
         BEAM    hue           54  trace and menu hue
         BEAM    palette       55  color palette

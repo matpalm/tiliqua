@@ -83,8 +83,7 @@ int_params!(ResoParams<u16>       { step: 2048, min: 0, max: 32768, format: IntF
 int_params!(DiffuseParams<u16>    { step: 2048, min: 0, max: 32768, format: IntFormat::Scaled { divisor: 32768, precision: 2, suffix: "" } });
 int_params!(AdsrTimeParams<u16>  { step: 1024, min: 0, max: 16384, format: IntFormat::Scaled { divisor: 16384, precision: 2, suffix: "" } });
 int_params!(AdsrLevelParams<u16> { step: 1024, min: 0, max: 32768, format: IntFormat::Scaled { divisor: 32768, precision: 2, suffix: "" } });
-int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
-int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
+int_params!(PersistParams<u8>     { step: 1, min: 1, max: 80 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
 int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 125 });
@@ -139,10 +138,8 @@ pub struct AdsrOpts {
 pub struct BeamOpts {
     #[option(VScale::Scale2V)]
     pub scale: EnumOption<VScale>,
-    #[option(32)]
+    #[option(15)]
     pub persist: IntOption<PersistParams>,
-    #[option(1)]
-    pub decay: IntOption<DecayParams>,
     #[option(8)]
     pub intensity: IntOption<IntensityParams>,
     #[option(10)]

@@ -480,7 +480,7 @@ fn main() -> ! {
     irq::scope(|s| {
 
         palette::ColorPalette::default().write_to_hardware(&mut display);
-        persist.set_persist(128);
+        persist.set_persistence(20);
 
         s.register(handlers::Interrupt::TIMER0, timer0);
 

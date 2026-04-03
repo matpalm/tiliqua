@@ -44,7 +44,7 @@ class GateDetector(wiring.Component):
     when it falls below :py:`threshold_off`.
     """
 
-    def __init__(self, threshold_on=asq_from_volts(2.0), threshold_off=asq_from_volts(1.0)):
+    def __init__(self, threshold_on=asq_from_volts(4.0), threshold_off=asq_from_volts(2.0)):
         self.threshold_on = threshold_on
         self.threshold_off = threshold_off
         super().__init__({

@@ -202,23 +202,28 @@ fn apply_cc_action(opts: &mut Opts, action: &opts::cc_map::CcAction) {
 
 fn build_cc_mapper(opts: &Opts) -> MidiCcMapper {
     let mut m = MidiCcMapper::new();
-    // Effect page
-    m.add(74, global_index(opts, &opts.effect.drive),    CcMapMode::Absolute);
-    m.add(17, global_index(opts, &opts.effect.diffuse),  CcMapMode::Absolute);
-    // Voice page
-    m.add(71, global_index(opts, &opts.voice.reso),      CcMapMode::Absolute);
-    m.add(22, global_index(opts, &opts.voice.waveform),  CcMapMode::Absolute);
-    m.add(24, global_index(opts, &opts.voice.proc),      CcMapMode::Absolute);
-    m.add(93, global_index(opts, &opts.voice.proc_amt),  CcMapMode::Absolute);
-    m.add(76, global_index(opts, &opts.voice.lfo_depth), CcMapMode::Absolute);
-    m.add(77, global_index(opts, &opts.voice.lfo_rate),  CcMapMode::Absolute);
-    // ADSR page
-    m.add(73, global_index(opts, &opts.adsr.attack),  CcMapMode::Absolute);
-    m.add(75, global_index(opts, &opts.adsr.decay),   CcMapMode::Absolute);
-    m.add(79, global_index(opts, &opts.adsr.sustain), CcMapMode::Absolute);
-    m.add(72, global_index(opts, &opts.adsr.release), CcMapMode::Absolute);
-    // Beam page
-    m.add(80, global_index(opts, &opts.beam.palette),  CcMapMode::Absolute);
+    // Voice page (CC 20-25)
+    m.add(20, global_index(opts, &opts.voice.waveform),  CcMapMode::Absolute);
+    m.add(21, global_index(opts, &opts.voice.proc),      CcMapMode::Absolute);
+    m.add(22, global_index(opts, &opts.voice.proc_amt),  CcMapMode::Absolute);
+    m.add(23, global_index(opts, &opts.voice.reso),      CcMapMode::Absolute);
+    m.add(24, global_index(opts, &opts.voice.lfo_rate),  CcMapMode::Absolute);
+    m.add(25, global_index(opts, &opts.voice.lfo_depth), CcMapMode::Absolute);
+    // ADSR page (CC 30-33)
+    m.add(30, global_index(opts, &opts.adsr.attack),  CcMapMode::Absolute);
+    m.add(31, global_index(opts, &opts.adsr.decay),   CcMapMode::Absolute);
+    m.add(32, global_index(opts, &opts.adsr.sustain), CcMapMode::Absolute);
+    m.add(33, global_index(opts, &opts.adsr.release), CcMapMode::Absolute);
+    // Effect page (CC 40-41)
+    m.add(40, global_index(opts, &opts.effect.drive),    CcMapMode::Absolute);
+    m.add(41, global_index(opts, &opts.effect.diffuse),  CcMapMode::Absolute);
+    // Beam page (CC 50-55)
+    m.add(50, global_index(opts, &opts.beam.scale),     CcMapMode::Absolute);
+    m.add(51, global_index(opts, &opts.beam.persist),   CcMapMode::Absolute);
+    m.add(52, global_index(opts, &opts.beam.decay),     CcMapMode::Absolute);
+    m.add(53, global_index(opts, &opts.beam.intensity), CcMapMode::Absolute);
+    m.add(54, global_index(opts, &opts.beam.hue),       CcMapMode::Absolute);
+    m.add(55, global_index(opts, &opts.beam.palette),   CcMapMode::Absolute);
     m
 }
 

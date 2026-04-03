@@ -478,8 +478,8 @@ class TiliquaSoc(Component):
             f.write(f"pub const AUDIO_FS: u32            = {self.clock_settings.audio_clock.fs()};\n")
 
             f.write("// Extra constants specified by an SoC subclass:\n")
-            if hasattr(self, '__doc__'):
-                f.write(f'pub const MODULE_DOCSTRING: &str = r###"{self.__doc__}"###;\n')
+            if hasattr(self, 'module_docstring'):
+                f.write(f'pub const MODULE_DOCSTRING: &str = r###"{self.module_docstring}"###;\n')
             for l in self.extra_rust_constants:
                 f.write(l)
 

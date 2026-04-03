@@ -115,7 +115,8 @@ class SamplerPeripheral(wiring.Component):
 
 class SamplerSoc(TiliquaSoc):
 
-    __doc__ = sys.modules[__name__].__doc__
+    # Used by `tiliqua_soc.py` to create a MODULE_DOCSTRING rust constant used by the 'help' page.
+    module_docstring = sys.modules[__name__].__doc__
 
     bitstream_help = BitstreamHelp(
         brief="3-ch granular sampler.",

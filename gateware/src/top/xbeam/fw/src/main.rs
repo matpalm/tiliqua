@@ -7,6 +7,9 @@ use riscv_rt::entry;
 use irq::handler;
 use core::cell::RefCell;
 
+use midi_types::*;
+use midi_convert::parse::MidiTryParseSlice;
+
 use tiliqua_fw::*;
 use tiliqua_lib::*;
 use tiliqua_lib::dsp::OnePoleSmoother;
@@ -17,6 +20,8 @@ use tiliqua_hal::embedded_graphics::prelude::*;
 
 use options::*;
 use opts::persistence::*;
+use opts::{Options, OptionTrait};
+use opts::cc_map::{MidiCcMapper, CcMapMode};
 use hal::pca9635::Pca9635Driver;
 use tiliqua_hal::dma_framebuffer::Rotate;
 use tiliqua_hal::tusb322::{TUSB322Driver, TUSB322Mode, AttachedState};
@@ -24,8 +29,68 @@ use tiliqua_hal::persist::Persist;
 
 pub const TIMER0_ISR_PERIOD_MS: u32 = 5;
 
+fn global_index(opts: &Opts, opt: &dyn OptionTrait) -> usize {
+    let key = opt.key().value();
+    opts.all().enumerate()
+        .find(|(_, o)| o.key().value() == key)
+        .expect("cc_map: option key not found").0
+}
+
+fn apply_cc_action(opts: &mut Opts, action: &opts::cc_map::CcAction) {
+    if let Some(opt) = opts.all_mut().nth(action.global_index) {
+        match action.mode {
+            CcMapMode::Absolute => { opt.set_from_cc(action.cc_value); }
+        }
+    }
+}
+
+fn build_cc_mapper(opts: &Opts) -> MidiCcMapper {
+    let mut m = MidiCcMapper::new();
+    // Vector page (CC 20-27)
+    m.add(20, global_index(opts, &opts.vector.x_offset),  CcMapMode::Absolute);
+    m.add(21, global_index(opts, &opts.vector.x_scale),   CcMapMode::Absolute);
+    m.add(22, global_index(opts, &opts.vector.y_offset),  CcMapMode::Absolute);
+    m.add(23, global_index(opts, &opts.vector.y_scale),   CcMapMode::Absolute);
+    m.add(24, global_index(opts, &opts.vector.i_offset),  CcMapMode::Absolute);
+    m.add(25, global_index(opts, &opts.vector.i_scale),   CcMapMode::Absolute);
+    m.add(26, global_index(opts, &opts.vector.c_offset),  CcMapMode::Absolute);
+    m.add(27, global_index(opts, &opts.vector.c_scale),   CcMapMode::Absolute);
+    // Delay page (CC 30-33)
+    m.add(30, global_index(opts, &opts.delay.delay_x),    CcMapMode::Absolute);
+    m.add(31, global_index(opts, &opts.delay.delay_y),    CcMapMode::Absolute);
+    m.add(32, global_index(opts, &opts.delay.delay_i),    CcMapMode::Absolute);
+    m.add(33, global_index(opts, &opts.delay.delay_c),    CcMapMode::Absolute);
+    // Beam page (CC 40-45)
+    m.add(40, global_index(opts, &opts.beam.persist),     CcMapMode::Absolute);
+    m.add(41, global_index(opts, &opts.beam.decay),       CcMapMode::Absolute);
+    m.add(42, global_index(opts, &opts.beam.ui_hue),      CcMapMode::Absolute);
+    m.add(43, global_index(opts, &opts.beam.palette),     CcMapMode::Absolute);
+    m.add(44, global_index(opts, &opts.beam.grid),        CcMapMode::Absolute);
+    m.add(45, global_index(opts, &opts.beam.grid_i),      CcMapMode::Absolute);
+    // Misc page (CC 50-52)
+    m.add(50, global_index(opts, &opts.misc.plot_type),   CcMapMode::Absolute);
+    m.add(51, global_index(opts, &opts.misc.plot_src),    CcMapMode::Absolute);
+    m.add(52, global_index(opts, &opts.misc.rotation),    CcMapMode::Absolute);
+    // Scope1 page (CC 60-64)
+    m.add(60, global_index(opts, &opts.scope1.ypos0),     CcMapMode::Absolute);
+    m.add(61, global_index(opts, &opts.scope1.ypos1),     CcMapMode::Absolute);
+    m.add(62, global_index(opts, &opts.scope1.ypos2),     CcMapMode::Absolute);
+    m.add(63, global_index(opts, &opts.scope1.ypos3),     CcMapMode::Absolute);
+    m.add(64, global_index(opts, &opts.scope1.n_channels), CcMapMode::Absolute);
+    // Scope2 page (CC 70-76)
+    m.add(70, global_index(opts, &opts.scope2.yscale),    CcMapMode::Absolute);
+    m.add(71, global_index(opts, &opts.scope2.timebase),  CcMapMode::Absolute);
+    m.add(72, global_index(opts, &opts.scope2.xzoom),     CcMapMode::Absolute);
+    m.add(73, global_index(opts, &opts.scope2.trig_mode), CcMapMode::Absolute);
+    m.add(74, global_index(opts, &opts.scope2.trig_lvl),  CcMapMode::Absolute);
+    m.add(75, global_index(opts, &opts.scope2.intensity), CcMapMode::Absolute);
+    m.add(76, global_index(opts, &opts.scope2.hue),       CcMapMode::Absolute);
+    m
+}
+
 struct App {
     ui: ui::UI<Encoder0, EurorackPmod0, I2c0, Opts>,
+    cc_mapper: MidiCcMapper,
 }
 
 impl App {
@@ -35,9 +100,11 @@ impl App {
         let i2cdev = I2c0::new(peripherals.I2C0);
         let pca9635 = Pca9635Driver::new(i2cdev);
         let pmod = EurorackPmod0::new(peripherals.PMOD0_PERIPH);
+        let cc_mapper = build_cc_mapper(&opts);
         Self {
             ui: ui::UI::new(opts, TIMER0_ISR_PERIOD_MS,
                             encoder, pca9635, pmod),
+            cc_mapper,
         }
     }
 }
@@ -46,6 +113,30 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
     critical_section::with(|cs| {
         let mut app = app.borrow_ref_mut(cs);
         app.ui.update();
+
+        // Check for TRS MIDI CC traffic
+        let xbeam = unsafe { pac::XBEAM_PERIPH::steal() };
+        let midi_word = xbeam.midi_read().read().bits();
+        if midi_word != 0 {
+            app.ui.midi_activity();
+            let bytes = [
+                (midi_word & 0xFF) as u8,
+                ((midi_word >> 8) & 0xFF) as u8,
+                ((midi_word >> 16) & 0xFF) as u8,
+            ];
+            if let Ok(msg) = MidiMessage::try_parse_slice(&bytes) {
+                if let MidiMessage::ControlChange(_, cc, val) = msg {
+                    if let Some(action) = app.cc_mapper.process(cc.into(), val.into()) {
+                        if app.ui.opts.misc.cc_highlight.value == CcHighlight::On {
+                            app.ui.opts.select_global(action.global_index);
+                            app.ui.external_modify();
+                        }
+                        apply_cc_action(&mut app.ui.opts, &action);
+                    }
+                }
+            }
+        }
+
         if app.ui.opts.misc.help.value == HelpPage::Off
             && app.ui.opts.tracker.page.value == Page::Help {
             app.ui.opts.tracker.page.value = Page::Vector;

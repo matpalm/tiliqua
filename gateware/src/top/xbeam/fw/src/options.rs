@@ -70,6 +70,14 @@ pub enum GridOverlay {
 
 #[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
 #[strum(serialize_all = "kebab-case")]
+pub enum CcHighlight {
+    Off,
+    #[default]
+    On,
+}
+
+#[derive(Default, Clone, Copy, PartialEq, EnumIter, IntoStaticStr, Serialize, Deserialize)]
+#[strum(serialize_all = "kebab-case")]
 pub enum XZoom {
     #[strum(serialize = "0.5x")]
     Half,
@@ -88,7 +96,7 @@ int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
 int_params!(TriggerLvlParams<i16> { step: 500, min: -16000, max: 16000, format: IntFormat::Scaled { divisor: 4000, precision: 2, suffix: "V" } });
 int_params!(PosParams<i16>       { step: 1, min: -40, max: 40, format: IntFormat::Scaled { divisor: 4, precision: 2, suffix: "d" } });
-int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 60 });
+int_params!(ScrollParams<u8>      { step: 1, min: 0, max: 125 });
 int_params!(NChannelsParams<u8>   { step: 1, min: 1, max: 4 });
 
 button_params!(OneShotButtonParams { mode: ButtonMode::OneShot });
@@ -159,6 +167,8 @@ pub struct MiscOpts {
     pub rotation: EnumOption<Rotate>,
     #[option]
     pub help: EnumOption<HelpPage>,
+    #[option]
+    pub cc_highlight: EnumOption<CcHighlight>,
     #[option(false)]
     pub save_opts: ButtonOption<OneShotButtonParams>,
     #[option(false)]

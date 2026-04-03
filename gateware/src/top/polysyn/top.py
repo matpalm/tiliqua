@@ -304,10 +304,13 @@ class PolySynth(wiring.Component):
         def scaled_tanh(x):
             return math.tanh(3.0*x)
 
+        m.submodules.mac_server = mac_server = dsp.mac.RingMACServer()
+
         outs = []
         for lr in [0, 1]:
-            vca = dsp.VCA()
-            waveshaper = dsp.WaveShaper(lut_function=scaled_tanh)
+            vca = dsp.VCA(macp=mac_server.new_client())
+            waveshaper = dsp.WaveShaper(lut_function=scaled_tanh,
+                                        macp=mac_server.new_client())
             setattr(m.submodules, f"out_gainvca_{lr}", vca)
             setattr(m.submodules, f"out_waveshaper_{lr}", waveshaper)
 

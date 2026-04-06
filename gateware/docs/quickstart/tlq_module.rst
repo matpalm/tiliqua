@@ -61,6 +61,10 @@ In theory, each user bitstream could have a completely different UI. For now tho
 Using Bitstreams
 ^^^^^^^^^^^^^^^^
 
+.. note::
+
+    The instructions here are always for the **latest firmware** - if the version shown at the bottom of the screen for any bitstream is not up-to-date (matching the latest `version number / changelist here <https://github.com/apfaudio/tiliqua/releases>`_), I recommend updating! (instructions below)
+
 Out of the box, Tiliqua ships with the following example bitstreams flashed. Many of them have built-in help pages. Here is a link to some more info on each one:
 
 - :ref:`XBEAM <xbeam>`
@@ -101,15 +105,18 @@ For flashing bitstreams, you want the ``dbg`` USB port. This is routed to the on
 Flashing/Updating Bitstreams
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You have 2 options:
+Tiliqua can be updated / flashed in 2 ways:
 
 - Use the **tiliqua-webflash** `(LINK) <https://apfaudio.github.io/tiliqua-webflash/>`_ tool, which works in any Chromium-based browser and allows you to flash bitstream archives to Tiliqua using any OS.
-    - Note: on mac / windows this should work out of the box. On Linux, make sure you have udev rules configured so the device is accessible without ``sudo`` by Chrome! See 'Check USB device permissions' in :doc:`../install`.
 - Using our ``pdm flash`` **command line tool**, which requires setting up the Tiliqua development environment first. More details in :doc:`../install`.
+
+With **tiliqua-webflash**, the latest release is always shown - no need to download anything. For command line, you can find the latest `published release here <https://github.com/apfaudio/tiliqua/releases>`_.
+
+Tiliqua has 9 slots (bootloader + 8 user slots). Generally, you want to keep all of these up-to-date, however, as they are independent, you can have different versions of things in every slot. You'll find instructions on how to update each slot in the respective flashing tool.
 
 .. note::
 
-    Tiliqua has 3 persistent memory chips that come pre-flashed out of the box. **Flashing / updating bitstreams only touches the first one.**
+    **Technical details for the curious!** Tiliqua has 3 persistent memory chips that come pre-flashed out of the box. **Flashing / updating bitstreams only touches the first one.**
 
         - On the 'Soldiercrab': one 16MB SPI flash for the FPGA: This one contains the bootloader bitstream and all the user bitstreams, and any saved options.
         - On the 'Motherboard':  16MB SPI flash for the RP2040 / debugger: this one contains the debugger firmware used as a bridge between the ``dbg`` USB port and the FPGA JTAG.

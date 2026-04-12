@@ -360,11 +360,9 @@ fn main() -> ! {
             }
 
             if on_help_page {
-                persist.set_persist(256);
-                persist.set_decay(1);
+                persist.set_persistence(64);
             } else {
-                persist.set_persist(opts.beam.persist.value);
-                persist.set_decay(opts.beam.decay.value);
+                persist.set_persistence(opts.beam.persist.value);
             }
 
             vscope.set_hue(opts.beam.hue.value);

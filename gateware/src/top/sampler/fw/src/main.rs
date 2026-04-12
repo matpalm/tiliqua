@@ -312,11 +312,9 @@ fn main() -> ! {
                     v_active,
                     opts.help.scroll.value,
                     hue).ok();
-                persist.set_persist(128);
-                persist.set_decay(1);
+                persist.set_persistence(64);
             } else {
-                persist.set_persist(128);
-                persist.set_decay(1);
+                persist.set_persistence(32);
             }
 
 

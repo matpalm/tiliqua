@@ -63,8 +63,7 @@ int_params!(NoteParams<u8>        { step: 1, min: 0, max: 128 });
 int_params!(HarmonicsParams<u8>   { step: 8, min: 0, max: 240 });
 int_params!(TimbreParams<u8>      { step: 8, min: 0, max: 240 });
 int_params!(MorphParams<u8>       { step: 8, min: 0, max: 240 });
-int_params!(PersistParams<u16>    { step: 128, min: 128, max: 8192 });
-int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
+int_params!(PersistParams<u8>     { step: 1, min: 1, max: 80 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
 int_params!(TriggerLvlParams<i16> { step: 500, min: -16000, max: 16000, format: IntFormat::Scaled { divisor: 4000, precision: 2, suffix: "V" } });
@@ -113,10 +112,8 @@ pub struct VectorOpts {
 
 #[derive(OptionPage, Clone)]
 pub struct BeamOpts {
-    #[option(256)]
+    #[option(15)]
     pub persist: IntOption<PersistParams>,
-    #[option(1)]
-    pub decay: IntOption<DecayParams>,
     #[option(8)]
     pub intensity: IntOption<IntensityParams>,
     #[option(10)]

@@ -849,7 +849,7 @@ fn main() -> ! {
         let mut logo_coord_ix = 0u32;
         let mut rng = fastrand::Rng::with_seed(0);
 
-        persist.set_persist(256);
+        persist.set_persistence(64);
 
         let stroke = PrimitiveStyleBuilder::new()
             .stroke_color(HI8::new(0, 10))

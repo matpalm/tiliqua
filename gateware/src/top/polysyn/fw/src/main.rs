@@ -217,10 +217,9 @@ fn build_cc_mapper(opts: &Opts) -> MidiCcMapper {
     // Effect page (CC 40-41)
     m.add(40, global_index(opts, &opts.effect.drive),    CcMapMode::Absolute);
     m.add(41, global_index(opts, &opts.effect.diffuse),  CcMapMode::Absolute);
-    // Beam page (CC 50-55)
+    // Beam page (CC 50-55, CC 52 formerly decay now unused)
     m.add(50, global_index(opts, &opts.beam.scale),     CcMapMode::Absolute);
     m.add(51, global_index(opts, &opts.beam.persist),   CcMapMode::Absolute);
-    m.add(52, global_index(opts, &opts.beam.decay),     CcMapMode::Absolute);
     m.add(53, global_index(opts, &opts.beam.intensity), CcMapMode::Absolute);
     m.add(54, global_index(opts, &opts.beam.hue),       CcMapMode::Absolute);
     m.add(55, global_index(opts, &opts.beam.palette),   CcMapMode::Absolute);
@@ -484,12 +483,10 @@ fn main() -> ! {
                     v_active,
                     opts.help.scroll.value,
                     opts.beam.hue.value).ok();
-                persist.set_persist(128);
-                persist.set_decay(1);
+                persist.set_persistence(64);
                 vscope.set_enabled(false);
             } else {
-                persist.set_persist(opts.beam.persist.value);
-                persist.set_decay(opts.beam.decay.value);
+                persist.set_persistence(opts.beam.persist.value);
                 vscope.set_enabled(true);
             }
 

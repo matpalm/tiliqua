@@ -90,8 +90,7 @@ pub enum XZoom {
 
 int_params!(DelayParams<u16>      { step: 8, min: 0, max: 512, format: IntFormat::Scaled { divisor: AUDIO_FS / 1000, precision: 1, suffix: "ms" } });
 int_params!(PCScaleParams<u8>     { step: 1, min: 0, max: 15 });
-int_params!(PersistParams<u16>    { step: 32, min: 32, max: 4096 });
-int_params!(DecayParams<u8>       { step: 1, min: 0, max: 15 });
+int_params!(PersistParams<u8>     { step: 1, min: 1, max: 80 });
 int_params!(IntensityParams<u8>   { step: 1, min: 0, max: 15 });
 int_params!(HueParams<u8>         { step: 1, min: 0, max: 15 });
 int_params!(TriggerLvlParams<i16> { step: 500, min: -16000, max: 16000, format: IntFormat::Scaled { divisor: 4000, precision: 2, suffix: "V" } });
@@ -141,10 +140,8 @@ pub struct DelayOpts {
 
 #[derive(OptionPage, Clone)]
 pub struct BeamOpts {
-    #[option(32)]
+    #[option(15)]
     pub persist: IntOption<PersistParams>,
-    #[option(1)]
-    pub decay: IntOption<DecayParams>,
     #[option(10)]
     pub ui_hue: IntOption<HueParams>,
     #[option]

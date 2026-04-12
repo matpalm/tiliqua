@@ -104,8 +104,8 @@ can also be used to control most of these through CCs as follows:
         DELAY   delay-i       32  in2/intensity delayline length
         DELAY   delay-c       33  in3/color delayline length
 
-        BEAM    persist       40  phosphor decay speed (high = slow)
-        BEAM    decay         41  phosphor decay amount (low = slow)
+        BEAM    persist       40  phosphor persistence (high = slow)
+                               -  (CC 41 deprecated)
         BEAM    ui-hue        42  menu and grid overlay hue
         BEAM    palette       43  color palette
         BEAM    grid          44  grid overlay style

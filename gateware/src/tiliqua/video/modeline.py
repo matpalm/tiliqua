@@ -114,6 +114,21 @@ class DVIModeline:
                 pixel_clk_mhz = 74.25,
             ),
 
+            # 52Pi 7 Inch HDMI IPS Display (1024x600px)
+            "1024x600p59.82": DVIModeline(
+                h_active      = 1024,
+                h_sync_start  = 1068,
+                h_sync_end    = 1156,
+                h_total       = 1344,
+                h_sync_invert = False,
+                v_active      = 600,
+                v_sync_start  = 603,
+                v_sync_end    = 609,
+                v_total       = 625,
+                v_sync_invert = True,
+                pixel_clk_mhz = 50.25,
+            ),
+
             # BEGIN ODDBALL TIMINGS
 
             # Tiliqua screen (early proto)
@@ -222,6 +237,17 @@ class DVIPLL:
                 clkos_div     = 19,
                 clkos_cphase  = 0,
                 clkos2_div    = 95,
+                clkos2_cphase = 0,
+                clkfb_div     = 4
+            ),
+            DVIPLL(
+                pixel_clk_mhz = 50.25,
+                clki_div      = 13,
+                clkop_div     = 34,
+                clkop_cphase  = 9,
+                clkos_div     = 2,
+                clkos_cphase  = 0,
+                clkos2_div    = 10,
                 clkos2_cphase = 0,
                 clkfb_div     = 4
             ),

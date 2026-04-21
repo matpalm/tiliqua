@@ -114,6 +114,8 @@ class DVIModeline:
                 pixel_clk_mhz = 74.25,
             ),
 
+            # BEGIN ODDBALL TIMINGS
+
             # 52Pi 7 Inch HDMI IPS Display (1024x600px)
             "1024x600p59.82": DVIModeline(
                 h_active      = 1024,
@@ -128,8 +130,6 @@ class DVIModeline:
                 v_sync_invert = True,
                 pixel_clk_mhz = 50.25,
             ),
-
-            # BEGIN ODDBALL TIMINGS
 
             # Tiliqua screen (early proto)
             "720x720p60proto1": DVIModeline(

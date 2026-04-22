@@ -27,6 +27,7 @@ import os
 import math
 import shutil
 import subprocess
+import random
 
 from amaranth                 import *
 from amaranth.build           import *
@@ -61,6 +62,8 @@ class BeamRaceInputs(wiring.Signature):
             "de":        Out(1),
             "x":         Out(signed(12)),
             "y":         Out(signed(12)),
+            "h_active":  Out(12),
+            "v_active":  Out(12),
             # Audio samples (already synchronized to DVI domain)
             "audio_in0": Out(signed(16)),
             "audio_in1": Out(signed(16)),
@@ -78,6 +81,56 @@ class BeamRaceOutputs(wiring.Signature):
             "g":     Out(8),
             "b":     Out(8),
         })
+
+class AboveZero(wiring.Component):
+
+    i: In(BeamRaceInputs())
+    o: Out(BeamRaceOutputs())
+
+    bitstream_help = BitstreamHelp(
+        brief="Beamracing 'Stripes' pattern",
+        io_left=['', '', '', '', 'in0 (copy)', 'in1 (copy)', 'in2 (copy)', 'in3 (copy)'],
+        io_right=['', '', 'video (fixed)', '', '', '']
+    )
+
+    def elaborate(self, platform):
+
+        m = Module()
+
+        flash = Signal()
+        l_vsync = Signal()
+        above_zero = Signal()
+
+        m.d.comb += above_zero.eq(self.i.audio_in0 > 0)
+
+        m.d.sync += [
+            l_vsync.eq(self.i.vsync),
+            #flash.eq(self.i.vsync & ~l_vsync & above_zero),
+            flash.eq(above_zero),
+        ]
+
+        with m.If(self.i.de):
+            with m.If(flash):
+                m.d.comb += [
+                    self.o.r.eq(0xFF),
+                    self.o.g.eq(0x00),
+                    self.o.b.eq(0x00),
+                ]
+            with m.Else():
+                m.d.comb += [
+                    self.o.r.eq(0x00),
+                    self.o.g.eq(0xFF),
+                    self.o.b.eq(0x00),
+                ]
+        with m.Else():
+            # do we really need this?
+            m.d.comb += [
+                self.o.r.eq(0x00),
+                self.o.g.eq(0x00),
+                self.o.b.eq(0x00),
+            ]
+
+        return m
 
 class Stripes(wiring.Component):
 
@@ -118,6 +171,117 @@ class Stripes(wiring.Component):
                 self.o.r.eq(Cat(C(0, 6), self.i.y[2], moving_x[5])),
                 self.o.g.eq(Cat(C(0, 6), self.i.y[2], moving_x[6])),
                 self.o.b.eq(Cat(C(0, 6), self.i.y[5], moving_x[7])),
+            ]
+
+        return m
+
+class LifeGrid(Elaboratable):
+
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+        # TODO: this would be completely baked into. how to do it with a trigger?
+        init_cells = random.getrandbits(width * height)
+        self.cells = Signal(width * height, reset=init_cells)
+        self.next_cells = Signal(width * height)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        # TODO: building signals etc for _every_ cell is overkill; how to
+        #       use RAM?
+
+        # for each cell...
+        for y in range(self.height):
+            for x in range(self.width):
+
+                # calculate neighbour idxs
+                neighbours = []
+                for dy in [-1, 0, 1]:
+                    for dx in [-1, 0, 1]:
+                        if dx == 0 and dy == 0:
+                            continue
+                        nx = (x + dx) % self.width
+                        ny = (y + dy) % self.height
+                        neighbours.append(self.cells[ny * self.width + nx])
+
+                # count the number of alive neighbours
+                num_alive_neighbours = Signal(4)
+                m.d.comb += num_alive_neighbours.eq(sum(neighbours))
+
+                # apply alive / dead rules
+                idx = y * self.width + x
+                with m.If(num_alive_neighbours == 3):
+                    # new
+                    m.d.comb += self.next_cells[idx].eq(1)
+                with m.Elif(num_alive_neighbours == 2):
+                    # keep alive ( if alive )
+                    m.d.comb += self.next_cells[idx].eq(self.cells[idx])
+                with m.Else():
+                    # die
+                    m.d.comb += self.next_cells[idx].eq(0)
+
+        # maintain a counter and each time it wraps update the cells.
+        # TODO: is this the best way to do this? hacky clock division?
+        counter = Signal(22)
+        m.d.sync += counter.eq(counter + 1)
+        with m.If(counter == 0):
+            m.d.sync += self.cells.eq(self.next_cells)
+
+        return m
+
+class GameOfLife(wiring.Component):
+
+    i: In(BeamRaceInputs())
+    o: Out(BeamRaceOutputs())
+
+    bitstream_help = BitstreamHelp(
+        brief="Beamracing 'GameOfLife' pattern",
+        io_left=['', '', '', '', 'in0 (copy)', 'in1 (copy)', 'in2 (copy)', 'in3 (copy)'],
+        io_right=['', '', 'video (fixed)', '', '', '']
+    )
+
+    def elaborate(self, platform):
+
+        m = Module()
+
+        P = 30         # super pixel size
+        W, H = 15, 15  # game of life grid size
+
+        m.submodules.grid = grid = LifeGrid(width=W, height=H)
+
+        cell_x   = Signal(range(W))
+        cell_y   = Signal(range(H))
+        cell_idx = Signal(range(W*H))
+        in_grid  = Signal()
+        alive    = Signal()
+
+        m.d.comb += [
+            in_grid.eq((self.i.x < W*P) & (self.i.y < H*P)),
+            cell_x.eq(self.i.x // P),
+            cell_y.eq(self.i.y // P),
+            cell_idx.eq(cell_y * W + cell_x),
+            alive.eq(grid.cells.bit_select(cell_idx, 1)),
+        ]
+
+        with m.If(self.i.de & in_grid):
+            with m.If(alive):
+                m.d.comb += [
+                    self.o.r.eq(0xFF),
+                    self.o.g.eq(0x00),
+                    self.o.b.eq(0x00),
+                ]
+            with m.Else():
+                m.d.comb += [
+                    self.o.r.eq(0x00),
+                    self.o.g.eq(0xFF),
+                    self.o.b.eq(0x00),
+                ]
+        with m.Else():
+            m.d.comb += [
+                self.o.r.eq(0x00),
+                self.o.g.eq(0x00),
+                self.o.b.eq(0xFF),
             ]
 
         return m
@@ -406,6 +570,8 @@ class BeamRaceTop(Elaboratable):
             core.i.de.eq(dvi_tgen.ctrl.de),
             core.i.x.eq(dvi_tgen.x),
             core.i.y.eq(dvi_tgen.y),
+            core.i.h_active.eq(dvi_tgen.timings.h_active),
+            core.i.v_active.eq(dvi_tgen.timings.v_active),
         ]
 
         # Hook up DVI PHY to the beamracer outputs
@@ -424,9 +590,11 @@ class BeamRaceTop(Elaboratable):
 
 # Different beamrace cores that can be selected using e.g. `pdm beamracer build --core=stripes`.
 CORES = {
+    "above_zero": AboveZero,
     "stripes":   Stripes,
     "balls":     Balls,
     "checkers":  Checkers,
+    "game_of_life": GameOfLife,
 }
 
 def simulation_ports(fragment):

@@ -178,7 +178,7 @@ class Stripes(wiring.Component):
 
 class LifeGrid(Elaboratable):
 
-    def __init__(self, width, height, in0_signal, vsync_signal):
+    def __init__(self, width, height, audio_in0):
         self.width = width
         self.height = height
 
@@ -193,8 +193,7 @@ class LifeGrid(Elaboratable):
 
         self.cells = Signal(width * height, reset=init_cells)
         self.next_cells = Signal(width * height)
-        self.in0_signal = in0_signal
-        self.vsync_signal = vsync_signal
+        self.audio_in0 = audio_in0
 
     def elaborate(self, platform):
         m = Module()
@@ -232,26 +231,19 @@ class LifeGrid(Elaboratable):
                     # die
                     m.d.comb += self.next_cells[idx].eq(0)
 
-        in0_above_zero = self.in0_signal > 0
-        l_in0_above_zero = Signal()
-        l_vsync = Signal()
-        tick_pending = Signal()
+        counter = Signal(24)
+        next_counter = Signal.like(counter)
+        crossed_zero = Signal()
 
-        m.d.sync += [
-            l_in0_above_zero.eq(in0_above_zero),
-            l_vsync.eq(self.vsync_signal),
+        m.d.comb += [
+            next_counter.eq(counter + (self.audio_in0.as_unsigned() >> 6)),
+            crossed_zero.eq(next_counter < counter),
         ]
 
-        in0_cross_zero = in0_above_zero & ~l_in0_above_zero
-        vsync_rise = self.vsync_signal & ~l_vsync
+        m.d.sync += counter.eq(next_counter)
 
-        with m.If(vsync_rise & (tick_pending | in0_cross_zero)):
-            m.d.sync += [
-                self.cells.eq(self.next_cells),
-                tick_pending.eq(0),
-            ]
-        with m.Elif(in0_cross_zero):
-            m.d.sync += tick_pending.eq(1)
+        with m.If(crossed_zero):
+            m.d.sync += self.cells.eq(self.next_cells)
 
         return m
 
@@ -270,14 +262,13 @@ class GameOfLife(wiring.Component):
 
         m = Module()
 
-        W, H = 15, 15  # game of life grid size
-        P = 15
+        W, H = 10, 10  # game of life grid size
+        P = 30
 
         m.submodules.grid = grid = LifeGrid(
             width=W,
             height=H,
-            in0_signal=self.i.audio_in0,
-            vsync_signal=self.i.vsync,
+            audio_in0=self.i.audio_in0,
         )
 
         cell_x   = Signal(range(W))

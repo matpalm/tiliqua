@@ -175,9 +175,40 @@ class Stripes(wiring.Component):
 
         return m
 
+class WeylSequence(Elaboratable):
+    def __init__(self, width=32, increment=0x9E3779B9, seed=0x6D2B79F5, prng_seed=0xA341316C):
+        self.width = width
+        self.increment = increment & ((1 << width) - 1)
+        self.value = Signal(width, reset=seed & ((1 << width) - 1))
+        self.prng = Signal(width, reset=prng_seed & ((1 << width) - 1))
+        self.xs1 = Signal(width)
+        self.xs2 = Signal(width)
+        self.xs3 = Signal(width)
+        self.rand32 = Signal(width)
+        self.advance = Signal()
+
+    def elaborate(self, platform):
+        m = Module()
+
+        mix = Signal(self.width)
+        m.d.comb += [
+            mix.eq(self.prng + self.value),
+            self.xs1.eq(mix ^ (mix << 13)),
+            self.xs2.eq(self.xs1 ^ (self.xs1 >> 17)),
+            self.xs3.eq(self.xs2 ^ (self.xs2 << 5)),
+            self.rand32.eq(self.xs3),
+        ]
+
+        with m.If(self.advance):
+            m.d.sync += [
+                self.value.eq(self.value + Const(self.increment, self.width)),
+                self.prng.eq(self.xs3),
+            ]
+        return m
+
 class LifeGrid(Elaboratable):
 
-    def __init__(self, width, height, tick_signal):
+    def __init__(self, width, height, tick_signal, rnd_flip_signal):
         self.width = width
         self.height = height
         # TODO: this would be completely baked into. how to do it with a trigger?
@@ -185,6 +216,7 @@ class LifeGrid(Elaboratable):
         self.cells = Signal(width * height, reset=init_cells)
         self.next_cells = Signal(width * height)
         self.tick_signal = tick_signal
+        self.rnd_flip_signal = rnd_flip_signal
 
     def elaborate(self, platform):
         m = Module()
@@ -225,8 +257,35 @@ class LifeGrid(Elaboratable):
         tick_above_zero = self.tick_signal > 0
         l_tick_above_zero = Signal()
         m.d.sync += l_tick_above_zero.eq(tick_above_zero)
-        with m.If(tick_above_zero & ~l_tick_above_zero):
+
+        rnd_flip_above_zero = self.rnd_flip_signal > 0
+        l_rnd_flip_above_zero = Signal()
+        m.d.sync += l_rnd_flip_above_zero.eq(rnd_flip_above_zero)
+
+        tick_edge = Signal()
+        rnd_flip_edge = Signal()
+        m.d.comb += [
+            tick_edge.eq(tick_above_zero & ~l_tick_above_zero),
+            rnd_flip_edge.eq(rnd_flip_above_zero & ~l_rnd_flip_above_zero),
+        ]
+
+        cell_count = self.width * self.height
+
+        m.submodules.weyl = weyl = WeylSequence()
+        m.d.comb += weyl.advance.eq(rnd_flip_edge & ~tick_edge)
+
+        flip_idx = Signal(range(cell_count))
+        m.d.comb += [
+            flip_idx.eq((weyl.rand32 ^ (weyl.rand32 >> 16)) % cell_count),
+        ]
+
+        with m.If(tick_edge):
             m.d.sync += self.cells.eq(self.next_cells)
+        with m.Elif(rnd_flip_edge):
+            with m.Switch(flip_idx):
+                for idx in range(cell_count):
+                    with m.Case(idx):
+                        m.d.sync += self.cells[idx].eq(~self.cells[idx])
 
         return m
 
@@ -245,11 +304,16 @@ class GameOfLife(wiring.Component):
 
         m = Module()
 
-        P = 40         # super pixel size
-        W, H = 10, 10  # game of life grid size
+        W, H = 15, 15  # game of life grid size
+
+        P = 600 // max(W, H) # super pixel size
 
         m.submodules.grid = grid = LifeGrid(
-            width=W, height=H, tick_signal=self.i.audio_in0)
+            width=W,
+            height=H,
+            tick_signal=self.i.audio_in0,
+            rnd_flip_signal=self.i.audio_in1,
+        )
 
         cell_x   = Signal(range(W))
         cell_y   = Signal(range(H))

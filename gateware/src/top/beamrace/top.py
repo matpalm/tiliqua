@@ -176,6 +176,7 @@ class Stripes(wiring.Component):
         return m
 
 class WeylSequence(Elaboratable):
+
     def __init__(self, width=32, increment=0x9E3779B9, seed=0x6D2B79F5, prng_seed=0xA341316C):
         self.width = width
         self.increment = increment & ((1 << width) - 1)
@@ -211,8 +212,16 @@ class LifeGrid(Elaboratable):
     def __init__(self, width, height, tick_signal, rnd_flip_signal):
         self.width = width
         self.height = height
-        # TODO: this would be completely baked into. how to do it with a trigger?
-        init_cells = random.getrandbits(width * height)
+
+        # Seed with a single glider at (5, 5).
+        # Relative glider cells: (1,0), (2,1), (0,2), (1, 2), (2, 2)
+        gx, gy = 5, 5
+        init_cells = 0
+        for dx, dy in [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)]:
+            x = (gx + dx) % width
+            y = (gy + dy) % height
+            init_cells |= 1 << (y * width + x)
+
         self.cells = Signal(width * height, reset=init_cells)
         self.next_cells = Signal(width * height)
         self.tick_signal = tick_signal

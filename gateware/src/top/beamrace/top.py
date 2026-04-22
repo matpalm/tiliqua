@@ -178,7 +178,7 @@ class Stripes(wiring.Component):
 
 class LifeGrid(Elaboratable):
 
-    def __init__(self, width, height, tick_signal, rnd_flip_signal):
+    def __init__(self, width, height, in0_signal, vsync_signal):
         self.width = width
         self.height = height
 
@@ -193,8 +193,8 @@ class LifeGrid(Elaboratable):
 
         self.cells = Signal(width * height, reset=init_cells)
         self.next_cells = Signal(width * height)
-        self.tick_signal = tick_signal
-        self.rnd_flip_signal = rnd_flip_signal
+        self.in0_signal = in0_signal
+        self.vsync_signal = vsync_signal
 
     def elaborate(self, platform):
         m = Module()
@@ -232,13 +232,26 @@ class LifeGrid(Elaboratable):
                     # die
                     m.d.comb += self.next_cells[idx].eq(0)
 
-        tick_above_zero = self.tick_signal > 0
-        l_tick_above_zero = Signal()
-        m.d.sync += l_tick_above_zero.eq(tick_above_zero)
-        tick_edge = tick_above_zero & ~l_tick_above_zero
+        in0_above_zero = self.in0_signal > 0
+        l_in0_above_zero = Signal()
+        l_vsync = Signal()
+        tick_pending = Signal()
 
-        with m.If(tick_edge):
-            m.d.sync += self.cells.eq(self.next_cells)
+        m.d.sync += [
+            l_in0_above_zero.eq(in0_above_zero),
+            l_vsync.eq(self.vsync_signal),
+        ]
+
+        in0_cross_zero = in0_above_zero & ~l_in0_above_zero
+        vsync_rise = self.vsync_signal & ~l_vsync
+
+        with m.If(vsync_rise & (tick_pending | in0_cross_zero)):
+            m.d.sync += [
+                self.cells.eq(self.next_cells),
+                tick_pending.eq(0),
+            ]
+        with m.Elif(in0_cross_zero):
+            m.d.sync += tick_pending.eq(1)
 
         return m
 
@@ -257,14 +270,14 @@ class GameOfLife(wiring.Component):
 
         m = Module()
 
-        W, H = 30, 30  # game of life grid size
+        W, H = 15, 15  # game of life grid size
         P = 15
 
         m.submodules.grid = grid = LifeGrid(
             width=W,
             height=H,
-            tick_signal=self.i.audio_in0,
-            rnd_flip_signal=self.i.audio_in1,
+            in0_signal=self.i.audio_in0,
+            vsync_signal=self.i.vsync,
         )
 
         cell_x   = Signal(range(W))

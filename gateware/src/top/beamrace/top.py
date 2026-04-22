@@ -182,14 +182,17 @@ class LifeGrid(Elaboratable):
         self.width = width
         self.height = height
 
-        # Seed with a single glider at (5, 5).
-        # Relative glider cells: (1,0), (2,1), (0,2), (1, 2), (2, 2)
-        gx, gy = 5, 5
+        def add_glider(gx, gy, cells):
+            for dx, dy in [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)]:
+                x = (gx + dx) % width
+                y = (gy + dy) % height
+                cells |= 1 << (y * width + x)
+            return cells
+
         init_cells = 0
-        for dx, dy in [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)]:
-            x = (gx + dx) % width
-            y = (gy + dy) % height
-            init_cells |= 1 << (y * width + x)
+        init_cells = add_glider(5, 5, init_cells)
+        init_cells = add_glider(7, 11, init_cells)
+        init_cells = add_glider(13, 9, init_cells)
 
         self.cells = Signal(width * height, reset=init_cells)
         self.next_cells = Signal(width * height)
@@ -231,7 +234,7 @@ class LifeGrid(Elaboratable):
                     # die
                     m.d.comb += self.next_cells[idx].eq(0)
 
-        counter = Signal(24)
+        counter = Signal(23)
         next_counter = Signal.like(counter)
         crossed_zero = Signal()
 

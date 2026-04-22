@@ -235,8 +235,10 @@ class LifeGrid(Elaboratable):
         next_counter = Signal.like(counter)
         crossed_zero = Signal()
 
+        step = Mux(self.audio_in0 <= 0, 0, self.audio_in0.as_unsigned() >> 6)
+
         m.d.comb += [
-            next_counter.eq(counter + (self.audio_in0.as_unsigned() >> 6)),
+            next_counter.eq(counter + step),
             crossed_zero.eq(next_counter < counter),
         ]
 
@@ -262,8 +264,8 @@ class GameOfLife(wiring.Component):
 
         m = Module()
 
-        W, H = 10, 10  # game of life grid size
-        P = 30
+        W, H = 25, 25  # game of life grid size
+        P = 20
 
         m.submodules.grid = grid = LifeGrid(
             width=W,

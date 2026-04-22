@@ -235,9 +235,7 @@ class LifeGrid(Elaboratable):
         tick_above_zero = self.tick_signal > 0
         l_tick_above_zero = Signal()
         m.d.sync += l_tick_above_zero.eq(tick_above_zero)
-
-        tick_edge = Signal()
-        m.d.comb += tick_edge.eq(tick_above_zero & ~l_tick_above_zero),
+        tick_edge = tick_above_zero & ~l_tick_above_zero
 
         with m.If(tick_edge):
             m.d.sync += self.cells.eq(self.next_cells)

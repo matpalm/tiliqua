@@ -177,13 +177,14 @@ class Stripes(wiring.Component):
 
 class LifeGrid(Elaboratable):
 
-    def __init__(self, width, height):
+    def __init__(self, width, height, tick_signal):
         self.width = width
         self.height = height
         # TODO: this would be completely baked into. how to do it with a trigger?
         init_cells = random.getrandbits(width * height)
         self.cells = Signal(width * height, reset=init_cells)
         self.next_cells = Signal(width * height)
+        self.tick_signal = tick_signal
 
     def elaborate(self, platform):
         m = Module()
@@ -221,11 +222,10 @@ class LifeGrid(Elaboratable):
                     # die
                     m.d.comb += self.next_cells[idx].eq(0)
 
-        # maintain a counter and each time it wraps update the cells.
-        # TODO: is this the best way to do this? hacky clock division?
-        counter = Signal(22)
-        m.d.sync += counter.eq(counter + 1)
-        with m.If(counter == 0):
+        tick_above_zero = self.tick_signal > 0
+        l_tick_above_zero = Signal()
+        m.d.sync += l_tick_above_zero.eq(tick_above_zero)
+        with m.If(tick_above_zero & ~l_tick_above_zero):
             m.d.sync += self.cells.eq(self.next_cells)
 
         return m
@@ -245,10 +245,11 @@ class GameOfLife(wiring.Component):
 
         m = Module()
 
-        P = 30         # super pixel size
-        W, H = 15, 15  # game of life grid size
+        P = 40         # super pixel size
+        W, H = 10, 10  # game of life grid size
 
-        m.submodules.grid = grid = LifeGrid(width=W, height=H)
+        m.submodules.grid = grid = LifeGrid(
+            width=W, height=H, tick_signal=self.i.audio_in0)
 
         cell_x   = Signal(range(W))
         cell_y   = Signal(range(H))

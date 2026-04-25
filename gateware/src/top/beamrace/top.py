@@ -189,10 +189,18 @@ class LifeGrid(Elaboratable):
                 cells |= 1 << (y * width + x)
             return cells
 
+        def add_r_pentomino(gx, gy, cells):
+            for dx, dy in [(0, 1), (0, 2), (1, 0), (1, 1), (2, 1)]:
+                x = (gx + dx) % width
+                y = (gy + dy) % height
+                cells |= 1 << (y * width + x)
+            return cells
+
         init_cells = 0
-        init_cells = add_glider(5, 5, init_cells)
-        init_cells = add_glider(7, 11, init_cells)
-        init_cells = add_glider(13, 9, init_cells)
+        # init_cells = add_r_pentomino(5, 5, init_cells)
+        init_cells = add_glider(3, 3, init_cells)
+        # init_cells = add_glider(7, 11, init_cells)
+        # init_cells = add_glider(13, 9, init_cells)
 
         self.cells = Signal(width * height, reset=init_cells)
         self.next_cells = Signal(width * height)
@@ -234,7 +242,10 @@ class LifeGrid(Elaboratable):
                     # die
                     m.d.comb += self.next_cells[idx].eq(0)
 
-        counter = Signal(23)
+        # maintain a counter incremented by in0
+        # each time it wraps we update the cells
+
+        counter = Signal(22)
         next_counter = Signal.like(counter)
         crossed_zero = Signal()
 
@@ -267,7 +278,7 @@ class GameOfLife(wiring.Component):
 
         m = Module()
 
-        W, H = 25, 25  # game of life grid size
+        W, H = 20, 30  # game of life grid size
         P = 20
 
         m.submodules.grid = grid = LifeGrid(

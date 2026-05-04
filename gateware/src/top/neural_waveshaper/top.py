@@ -23,8 +23,10 @@ from tiliqua.dsp.mix import CoeffUpdate
 from tiliqua.periph import eurorack_pmod, psram
 from tiliqua.platform import RebootProvider
 
+# from tiliqua.dsp.neural_waveshaper import LeftShiftBuffer
 
-class Foo(wiring.Component):
+
+class NeuralWaveshaper(wiring.Component):
     """
     Route audio inputs straight to outputs (in the audio domain).
     This is the simplest possible core, useful for basic tests.
@@ -34,22 +36,29 @@ class Foo(wiring.Component):
     o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
 
     bitstream_help = BitstreamHelp(
-        brief="Foo",
+        brief="Neural waveshaper.",
         io_left=[
-            "in0",
-            "in1",
-            "in2",
-            "in3",
-            "in0 (dcopy)",
-            "in1 (cfopy)",
-            "in2 (cogpy)",
-            "in3 (cophy)",
+            "core wave",
+            "embedding x",
+            "embedding y",
+            "",
+            "waveshaped",
+            "",
+            "",
+            "",
         ],
         io_right=["", "", "", "", "", ""],
     )
 
     def elaborate(self, platform):
         m = Module()
+
+        # self.lsb = lsb = LeftShiftBuffer()
+
+        # # shift to FP4.12
+        # x = self.i.payload[0] >> 2
+        # e0 = self.i.payload[1] >> 2
+        # e1 = self.i.payload[2] >> 2
 
         in0 = self.i.payload[0]
         in1 = self.i.payload[1]
@@ -69,7 +78,7 @@ class Foo(wiring.Component):
 class CoreTop(Elaboratable):
 
     def __init__(self, clock_settings):
-        self.core = Foo()
+        self.core = NeuralWaveshaper()
         self.core.audio_clock = clock_settings.audio_clock
         self.touch = False
         self.clock_settings = clock_settings

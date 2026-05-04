@@ -23,8 +23,12 @@ from tiliqua.dsp.mix import CoeffUpdate
 from tiliqua.periph import eurorack_pmod, psram
 from tiliqua.platform import RebootProvider
 
-# from tiliqua.dsp.neural_waveshaper import LeftShiftBuffer
-
+# complete WIP hack :/
+CDCC_ROOT = "/home/mat/dev/cached_dilated_causal_convolutions/"
+sys.path.insert(0, f"{CDCC_ROOT}/amaranth_version/src")
+from cdcc.left_shift_buffer import LeftShiftBuffer
+from cdcc import NNQ
+from cdcc.qb_network_simple import build_network
 
 class NeuralWaveshaper(wiring.Component):
     """
@@ -50,26 +54,54 @@ class NeuralWaveshaper(wiring.Component):
         io_right=["", "", "", "", "", ""],
     )
 
+    def __init__(self):
+        trained_weights = (
+            f"{CDCC_ROOT}/runs/41_tiliqua_1layer/weights/qkeras/latest.pkl"
+        )
+        self.qb_model = build_network(trained_weights)
+        super().__init__()
+
     def elaborate(self, platform):
         m = Module()
 
-        # self.lsb = lsb = LeftShiftBuffer()
+        m.submodules.qb_model = self.qb_model
 
-        # # shift to FP4.12
-        # x = self.i.payload[0] >> 2
-        # e0 = self.i.payload[1] >> 2
-        # e1 = self.i.payload[2] >> 2
-
-        in0 = self.i.payload[0]
-        in1 = self.i.payload[1]
-
+        # map inputs.
+        # model operates in NNQ (FP4.12) but tiliqua is ASQ (FP1.15)
+        # so we need to right shift each channel by 3 on the way in.
+        # note: model is currently (in0, in1, in2) = (x, e0, e1)
+        # with an expected 0 values for in3
+        model_input = Array(Signal(NNQ, name=f"model_input_k{k}") for k in range(4))
+        for c in range(3):
+            m.d.comb += [
+                model_input[c].eq(self.i.payload[c] >> 3),
+                self.qb_model.i.payload[c].eq(model_input[c]),
+            ]
         m.d.comb += [
-            self.o.valid.eq(self.i.valid),
-            self.i.ready.eq(self.o.ready),
-            self.o.payload[0].eq(Mux(in0 <= in1, in0, in1)),
-            self.o.payload[1].eq(Mux(in0 <= in1, in1, in0)),
+            self.qb_model.i.payload[3].eq(0),
+        ]
+
+        # map outputs
+        # the model only outputs one value ( on out0 ) so map that
+        # with the required shift right
+        # TODO: do we need to saturate? the model is FP4 and shouldn't output
+        # over 1 but tiliqua is FP1 (?)
+        waveshaped_out = Signal(ASQ)
+        m.d.comb += [
+            waveshaped_out.eq(self.qb_model.o.payload << 3),
+            self.o.payload[0].eq(waveshaped_out),
+            self.o.payload[1].eq(0),
             self.o.payload[2].eq(0),
             self.o.payload[3].eq(0),
+        ]
+
+        # wire up ready and valid
+        # TODO: could wiring.connect do all this?
+        m.d.comb += [
+            self.qb_model.i.valid.eq(self.i.valid),
+            self.i.ready.eq(self.qb_model.i.ready),
+            self.qb_model.o.ready.eq(self.o.ready),
+            self.o.valid.eq(self.qb_model.o.valid),
         ]
 
         return m

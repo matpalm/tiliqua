@@ -26,9 +26,8 @@ from tiliqua.platform import RebootProvider
 # complete WIP hack :/
 CDCC_ROOT = "/home/mat/dev/cached_dilated_causal_convolutions/"
 sys.path.insert(0, f"{CDCC_ROOT}/amaranth_version/src")
-from cdcc.left_shift_buffer import LeftShiftBuffer
 from cdcc import NNQ
-from cdcc.qb_network_simple import build_network
+from cdcc.qb_network_2_layer import QbNetworkTwoLayer
 
 class NeuralWaveshaper(wiring.Component):
     """
@@ -56,9 +55,9 @@ class NeuralWaveshaper(wiring.Component):
 
     def __init__(self):
         trained_weights = (
-            f"{CDCC_ROOT}/runs/41_tiliqua_1layer/weights/qkeras/latest.pkl"
+            f"{CDCC_ROOT}/runs/43_tiliqua_2layer_4d/weights/qkeras/latest.pkl"
         )
-        self.qb_model = build_network(trained_weights)
+        self.qb_model = QbNetworkTwoLayer.build(trained_weights)
         super().__init__()
 
     def elaborate(self, platform):

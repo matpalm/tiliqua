@@ -32,7 +32,7 @@ CDCC_ROOT = "/home/mat/dev/cached_dilated_causal_convolutions/"
 RUN = os.getenv("RUN", "46_tiliqua_2layer_4d_retest")
 sys.path.insert(0, f"{CDCC_ROOT}/amaranth_version/src")
 from cdcc import NNQ
-from cdcc.qb_network_3_layer import QbNetworkThreeLayer
+from cdcc.qb_network import QbNetwork
 
 class NeuralWaveshaper(wiring.Component):
     """
@@ -65,7 +65,7 @@ class NeuralWaveshaper(wiring.Component):
                 f"failed to load weights for CDCC_ROOT=[{CDCC_ROOT}] with $RUN=[{RUN}]"
             )
         print(f"loading weights from {trained_weights}")
-        self.qb_model = QbNetworkThreeLayer.build(trained_weights)
+        self.qb_model = QbNetwork.build(trained_weights)
         super().__init__()
 
     def elaborate(self, platform):
@@ -88,8 +88,6 @@ class NeuralWaveshaper(wiring.Component):
 
         # map outputs
         # the model only outputs one value ( on out0 ) so map that out
-        # TODO: do we need to saturate? the model is FP4 and shouldn't output
-        # over 1 but tiliqua is FP1 (?)
         waveshaped_out = Signal(ASQ)
         m.d.comb += [
             waveshaped_out.eq(self.qb_model.o.payload),

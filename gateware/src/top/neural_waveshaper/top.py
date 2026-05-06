@@ -92,11 +92,11 @@ class NeuralWaveshaper(wiring.Component):
         # over 1 but tiliqua is FP1 (?)
         waveshaped_out = Signal(ASQ)
         m.d.comb += [
-            waveshaped_out.eq(self.qb_model.o.payload),  ## << 3),
+            waveshaped_out.eq(self.qb_model.o.payload),
             self.o.payload[0].eq(waveshaped_out),
             self.o.payload[1].eq(0),
-            self.o.payload[2].eq(ASQ.max()),
-            self.o.payload[3].eq(ASQ.min()),
+            self.o.payload[2].eq(0),
+            self.o.payload[3].eq(0),
         ]
 
         # wire up ready and valid

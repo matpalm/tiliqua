@@ -7,6 +7,8 @@ from scipy.interpolate import CubicHermiteSpline
 import sys
 import os
 
+from amaranth_future import fixed
+
 from amaranth import *
 from amaranth.build import *
 from amaranth.lib import data, stream, wiring
@@ -23,11 +25,14 @@ from tiliqua.dsp.mix import CoeffUpdate
 from tiliqua.periph import eurorack_pmod, psram
 from tiliqua.platform import RebootProvider
 
-# complete WIP hack :/
+# complete WIP hack :/ should be plumbed through from CLI
+import os
+
 CDCC_ROOT = "/home/mat/dev/cached_dilated_causal_convolutions/"
+RUN = os.getenv("RUN", "46_tiliqua_2layer_4d_retest")
 sys.path.insert(0, f"{CDCC_ROOT}/amaranth_version/src")
 from cdcc import NNQ
-from cdcc.qb_network_2_layer import QbNetworkTwoLayer
+from cdcc.qb_network_3_layer import QbNetworkThreeLayer
 
 class NeuralWaveshaper(wiring.Component):
     """
@@ -54,10 +59,13 @@ class NeuralWaveshaper(wiring.Component):
     )
 
     def __init__(self):
-        trained_weights = (
-            f"{CDCC_ROOT}/runs/43_tiliqua_2layer_4d/weights/qkeras/latest.pkl"
-        )
-        self.qb_model = QbNetworkTwoLayer.build(trained_weights)
+        trained_weights = f"{CDCC_ROOT}/runs/{RUN}/weights/qkeras/latest.pkl"
+        if not os.path.exists(trained_weights):
+            raise Exception(
+                f"failed to load weights for CDCC_ROOT=[{CDCC_ROOT}] with $RUN=[{RUN}]"
+            )
+        print(f"loading weights from {trained_weights}")
+        self.qb_model = QbNetworkThreeLayer.build(trained_weights)
         super().__init__()
 
     def elaborate(self, platform):
@@ -66,14 +74,12 @@ class NeuralWaveshaper(wiring.Component):
         m.submodules.qb_model = self.qb_model
 
         # map inputs.
-        # model operates in NNQ (FP4.12) but tiliqua is ASQ (FP1.15)
-        # so we need to right shift each channel by 3 on the way in.
-        # note: model is currently (in0, in1, in2) = (x, e0, e1)
-        # with an expected 0 values for in3
+        # note: model is currently (x, e0, e1, 0)
+        # ( with an expected 0 values for in3 )
         model_input = Array(Signal(NNQ, name=f"model_input_k{k}") for k in range(4))
         for c in range(3):
             m.d.comb += [
-                model_input[c].eq(self.i.payload[c] >> 3),
+                model_input[c].eq(self.i.payload[c]),
                 self.qb_model.i.payload[c].eq(model_input[c]),
             ]
         m.d.comb += [
@@ -81,17 +87,16 @@ class NeuralWaveshaper(wiring.Component):
         ]
 
         # map outputs
-        # the model only outputs one value ( on out0 ) so map that
-        # with the required shift right
+        # the model only outputs one value ( on out0 ) so map that out
         # TODO: do we need to saturate? the model is FP4 and shouldn't output
         # over 1 but tiliqua is FP1 (?)
         waveshaped_out = Signal(ASQ)
         m.d.comb += [
-            waveshaped_out.eq(self.qb_model.o.payload << 3),
+            waveshaped_out.eq(self.qb_model.o.payload),  ## << 3),
             self.o.payload[0].eq(waveshaped_out),
             self.o.payload[1].eq(0),
-            self.o.payload[2].eq(0),
-            self.o.payload[3].eq(0),
+            self.o.payload[2].eq(ASQ.max()),
+            self.o.payload[3].eq(ASQ.min()),
         ]
 
         # wire up ready and valid

@@ -72,6 +72,7 @@ class NeuralWaveshaper(wiring.Component):
         m = Module()
 
         m.submodules.qb_model = self.qb_model
+        m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
         # map inputs.
         # note: model is currently (x, e0, e1, 0)
@@ -86,24 +87,28 @@ class NeuralWaveshaper(wiring.Component):
             self.qb_model.i.payload[3].eq(0),
         ]
 
-        # map outputs
-        # the model only outputs one value ( on out0 ) so map that out
-        waveshaped_out = Signal(ASQ)
+        # The model only outputs one value (on out0),
+        # saturate to ASQ and output a filtered and unfiltered version
+        waveshaped_out = Signal(NNQ)
+        saturated_waveshaped_out = waveshaped_out.saturate(ASQ)
         m.d.comb += [
             waveshaped_out.eq(self.qb_model.o.payload),
-            self.o.payload[0].eq(waveshaped_out),
-            self.o.payload[1].eq(0),
+            post_lpf.i.payload.eq(saturated_waveshaped_out),
+            post_lpf.shift.eq(1),
+            self.o.payload[0].eq(post_lpf.o.payload),
+            self.o.payload[1].eq(saturated_waveshaped_out),
             self.o.payload[2].eq(0),
             self.o.payload[3].eq(0),
         ]
 
         # wire up ready and valid
-        # TODO: could wiring.connect do all this?
         m.d.comb += [
             self.qb_model.i.valid.eq(self.i.valid),
             self.i.ready.eq(self.qb_model.i.ready),
-            self.qb_model.o.ready.eq(self.o.ready),
-            self.o.valid.eq(self.qb_model.o.valid),
+            post_lpf.i.valid.eq(self.qb_model.o.valid),
+            self.qb_model.o.ready.eq(post_lpf.i.ready),
+            post_lpf.o.ready.eq(self.o.ready),
+            self.o.valid.eq(post_lpf.o.valid),
         ]
 
         return m

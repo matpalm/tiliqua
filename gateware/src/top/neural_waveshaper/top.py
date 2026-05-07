@@ -29,7 +29,9 @@ from tiliqua.platform import RebootProvider
 import os
 
 CDCC_ROOT = "/home/mat/dev/cached_dilated_causal_convolutions/"
-RUN = os.getenv("RUN", "46_tiliqua_2layer_4d_retest")
+RUN = os.getenv("RUN")
+if RUN is None:
+    raise Exception("$RUN not set")
 sys.path.insert(0, f"{CDCC_ROOT}/amaranth_version/src")
 from cdcc import NNQ
 from cdcc.qb_network import QbNetwork
@@ -102,6 +104,7 @@ class NeuralWaveshaper(wiring.Component):
         ]
 
         # wire up ready and valid
+        # TODO: could wiring.connect do all this?
         m.d.comb += [
             self.qb_model.i.valid.eq(self.i.valid),
             self.i.ready.eq(self.qb_model.i.ready),

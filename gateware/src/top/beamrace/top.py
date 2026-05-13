@@ -348,25 +348,20 @@ class Checkers(wiring.Component):
 
 class EuroVidRack(wiring.Component):
 
-    """
-    Beamracing pattern core.
-    Displays a static 128x75 RGB image from euro_128.png, scaled 8x to 1024x600.
-    """
-
     i: In(BeamRaceInputs())
     o: Out(BeamRaceOutputs())
 
     bitstream_help = BitstreamHelp(
         brief="Beamracing static EuroVidRack image",
         io_left=[
+            "sync delay control",
+            "original vs feedback",
+            "img feedback",
+            "sync feedback",
             "",
-            "",
-            "",
-            "",
-            "in0 (copy)",
             "in1 (copy)",
-            "in2 (copy)",
-            "in3 (copy)",
+            "img send",
+            "sycn send",
         ],
         io_right=["", "", "video (fixed)", "", "", ""],
     )
@@ -421,6 +416,10 @@ class EuroVidRack(wiring.Component):
         in_range_d = Signal()
         show_original = Signal()
         show_original_d = Signal()
+        rx_delay_sel = Signal(range(3), init=1)
+        rx_data = Signal(signed(16))
+        rx_data_d1 = Signal(signed(16))
+        rx_data_d2 = Signal(signed(16))
         in2_unsigned = Signal(unsigned(ASQ.width))
         feedback_px = Signal(8)
         rx_plane = Signal(range(3), init=0)
@@ -454,9 +453,21 @@ class EuroVidRack(wiring.Component):
                 & (self.i.y < self.OUT_H)
             ),
             show_original.eq(audio_sync[1] > 0),
+            # Runtime delay tuning for input channel 3 payload (in3).
+            # Drive audio_in0 to choose delay taps:
+            #   > +0.25FS -> 0 samples delay
+            #   [-0.25FS, +0.25FS] -> 1 sample delay (default)
+            #   < -0.25FS -> 2 samples delay
+            rx_data.eq(
+                Mux(
+                    rx_delay_sel == 0,
+                    audio_sync[2],
+                    Mux(rx_delay_sel == 1, rx_data_d1, rx_data_d2),
+                )
+            ),
             # Inverse of BeamRaceTop's image-byte serialization on channel 3:
             # out = (pixel * 257) - 32768  =>  pixel = ((in + 32768) >> 8).
-            in2_unsigned.eq(audio_sync[2] + (1 << (ASQ.width - 1))),
+            in2_unsigned.eq(rx_data + (1 << (ASQ.width - 1))),
             feedback_px.eq(in2_unsigned[8:16]),
             # Sync channel is input channel 4 (index 3): positive pulse marks frame start.
             rx_sync.eq(audio_sync[3] > 0),
@@ -495,7 +506,16 @@ class EuroVidRack(wiring.Component):
             in_range_d.eq(in_range),
             show_original_d.eq(show_original),
             audio_tick_d.eq(self.i.audio_tick),
+            rx_data_d1.eq(audio_sync[2]),
+            rx_data_d2.eq(rx_data_d1),
         ]
+
+        with m.If(audio_sync[0] > (1 << (ASQ.width - 3))):
+            m.d.sync += rx_delay_sel.eq(0)
+        with m.Elif(audio_sync[0] < -(1 << (ASQ.width - 3))):
+            m.d.sync += rx_delay_sel.eq(2)
+        with m.Else():
+            m.d.sync += rx_delay_sel.eq(1)
 
         with m.If(audio_tick_rise):
             with m.If(rx_sync):
@@ -562,6 +582,7 @@ class BeamRaceTop(Elaboratable):
 
         self._serial_depth = None
         self.serial_original_rgb = None
+        self._serial_sync_burst = 8
         if beamrace_core is EuroVidRack:
             image_path = os.path.join(os.path.dirname(__file__), "euro_128.png")
             img = Image.open(image_path).convert("RGB")
@@ -620,7 +641,9 @@ class BeamRaceTop(Elaboratable):
         tx_audio = Signal(signed(ASQ.width))
         tx_sample = Signal(signed(ASQ.width))
         tx_sync = Signal(signed(ASQ.width))
-        tx_send_sync = Signal(init=1)
+        tx_sync_count = Signal(
+            range(self._serial_sync_burst + 1), init=self._serial_sync_burst
+        )
         tx_plane = Signal(range(3), init=0)
         tx_idx = Signal(
             range(self._serial_depth if self._serial_depth is not None else 2), init=0
@@ -653,12 +676,8 @@ class BeamRaceTop(Elaboratable):
 
         with m.If(sample_stb):
             m.d.sync += audio_tick_toggle.eq(~audio_tick_toggle)
-            with m.If(tx_send_sync):
-                m.d.sync += [
-                    tx_send_sync.eq(0),
-                    tx_plane.eq(0),
-                    tx_idx.eq(0),
-                ]
+            with m.If(tx_sync_count != 0):
+                m.d.sync += tx_sync_count.eq(tx_sync_count - 1)
             with m.Else():
                 if self._serial_depth is not None:
                     with m.If(tx_idx == (self._serial_depth - 1)):
@@ -666,7 +685,7 @@ class BeamRaceTop(Elaboratable):
                         with m.If(tx_plane == 2):
                             m.d.sync += [
                                 tx_plane.eq(0),
-                                tx_send_sync.eq(1),
+                                tx_sync_count.eq(self._serial_sync_burst),
                             ]
                         with m.Else():
                             m.d.sync += tx_plane.eq(tx_plane + 1)
@@ -676,11 +695,16 @@ class BeamRaceTop(Elaboratable):
         m.d.comb += [
             # 0 -> -32768, 255 -> +32767 (for ASQ.width=16)
             tx_audio.eq((tx_byte * 257) - (1 << (ASQ.width - 1))),
-            tx_sample.eq(tx_audio),
+            # Hold data channel at 0 during sync burst.
+            tx_sample.eq(Mux(tx_sync_count != 0, 0, tx_audio)),
             # Sync stream on output channel 4 (index 3):
-            # +FS for sync sample, -FS otherwise.
+            # +FS for sync burst, -FS otherwise.
             tx_sync.eq(
-                Mux(tx_send_sync, (1 << (ASQ.width - 1)) - 1, -(1 << (ASQ.width - 1)))
+                Mux(
+                    tx_sync_count != 0,
+                    (1 << (ASQ.width - 1)) - 1,
+                    -(1 << (ASQ.width - 1)),
+                )
             ),
             pmod0.i_cal.valid.eq(pmod0.o_cal.valid),
             pmod0.o_cal.ready.eq(pmod0.i_cal.ready),

@@ -343,9 +343,10 @@ class Checkers(wiring.Component):
 
 
 class EuroVidRack(wiring.Component):
+
     """
     Beamracing pattern core.
-    Displays a static 128x75 RGB image from euro_128.png.
+    Displays a static 128x75 RGB image from euro_128.png, scaled 8x to 1024x600.
     """
 
     i: In(BeamRaceInputs())
@@ -396,9 +397,14 @@ class EuroVidRack(wiring.Component):
 
         m = Module()
 
-        pix_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
+        # Keep synchronized copies of audio channels available in this core.
+        audio_sync = [Signal(signed(16), name=f"audio_sync_{ch}") for ch in range(4)]
+        for ch in range(4):
+            m.d.sync += audio_sync[ch].eq(getattr(self.i, f"audio_in{ch}"))
+
         src_x = Signal(range(self.IMAGE_W))
         src_y = Signal(range(self.IMAGE_H))
+        pix_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
         in_range = Signal()
         in_range_d = Signal()
 
@@ -435,7 +441,6 @@ class EuroVidRack(wiring.Component):
 
         return m
 
-
 class BeamRaceTop(Elaboratable):
 
     """
@@ -453,6 +458,7 @@ class BeamRaceTop(Elaboratable):
         self.clock_settings = clock_settings
         self.pmod0 = eurorack_pmod.EurorackPmod(self.clock_settings.audio_clock)
         self.dvi_tgen = dvi.DVITimingGen()
+        self._beamrace_core_cls = beamrace_core
 
         # Instantiate the provided beamracing core, for us to wrap it
         self.core = DomainRenamer("dvi")(beamrace_core())
@@ -480,9 +486,6 @@ class BeamRaceTop(Elaboratable):
 
         m.submodules.pmod0 = pmod0 = self.pmod0
 
-        # Mirror audio inputs to audio outputs
-        wiring.connect(m, pmod0.o_cal, pmod0.i_cal)
-
         m.submodules.dvi_tgen = dvi_tgen = self.dvi_tgen
 
         # Configure the DVI timing generator to match the selected resolution
@@ -491,6 +494,27 @@ class BeamRaceTop(Elaboratable):
 
         # Beamracer core itself
         m.submodules.core = core = self.core
+
+        # Audio routing: channel 0 is serialized video red channel mapped
+        # from [0, 255] to signed ASQ full-scale [-1, 1], channels 1-3 passthrough.
+        red_sync = Signal(8)
+        red_audio = Signal(signed(ASQ.width))
+        m.submodules += FFSynchronizer(
+            i=core.o.r,
+            o=red_sync,
+            o_domain="sync",
+        )
+
+        m.d.comb += [
+            # 0 -> -32768, 255 -> +32767 (for ASQ.width=16)
+            red_audio.eq((red_sync * 257) - (1 << (ASQ.width - 1))),
+            pmod0.i_cal.valid.eq(pmod0.o_cal.valid),
+            pmod0.o_cal.ready.eq(pmod0.i_cal.ready),
+            pmod0.i_cal.payload[0].eq(red_audio),
+            pmod0.i_cal.payload[1].eq(pmod0.o_cal.payload[1]),
+            pmod0.i_cal.payload[2].eq(pmod0.o_cal.payload[2]),
+            pmod0.i_cal.payload[3].eq(pmod0.o_cal.payload[3]),
+        ]
 
         # Synchronize audio inputs into DVI domain and provide them to the beamracer core.
         for ch in range(4):

@@ -28,6 +28,9 @@ import math
 import shutil
 import subprocess
 
+from PIL import Image
+import numpy as np
+
 from amaranth                 import *
 from amaranth.build           import *
 from amaranth.lib             import wiring, data, stream
@@ -338,6 +341,101 @@ class Checkers(wiring.Component):
 
         return m
 
+
+class EuroVidRack(wiring.Component):
+    """
+    Beamracing pattern core.
+    Displays a static 128x75 RGB image from euro_128.png.
+    """
+
+    i: In(BeamRaceInputs())
+    o: Out(BeamRaceOutputs())
+
+    bitstream_help = BitstreamHelp(
+        brief="Beamracing static EuroVidRack image",
+        io_left=[
+            "",
+            "",
+            "",
+            "",
+            "in0 (copy)",
+            "in1 (copy)",
+            "in2 (copy)",
+            "in3 (copy)",
+        ],
+        io_right=["", "", "video (fixed)", "", "", ""],
+    )
+
+    IMAGE_W = 128
+    IMAGE_H = 75
+    SCALE = 8
+    OUT_W = IMAGE_W * SCALE
+    OUT_H = IMAGE_H * SCALE
+
+    def __init__(self):
+        super().__init__()
+
+        image_path = os.path.join(os.path.dirname(__file__), "euro_128.png")
+        img = Image.open(image_path).convert("RGB")
+        if img.size != (self.IMAGE_W, self.IMAGE_H):
+            raise ValueError(
+                f"expected {image_path} to be {self.IMAGE_W}x{self.IMAGE_H}, got {img.size}"
+            )
+
+        pixels = np.asarray(img, dtype=np.uint8).reshape(-1, 3)
+        packed_pixels = [
+            (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2]) for px in pixels
+        ]
+        self.rom = Memory(
+            width=24,
+            depth=self.IMAGE_W * self.IMAGE_H,
+            init=packed_pixels,
+        )
+
+    def elaborate(self, platform):
+
+        m = Module()
+
+        pix_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
+        src_x = Signal(range(self.IMAGE_W))
+        src_y = Signal(range(self.IMAGE_H))
+        in_range = Signal()
+        in_range_d = Signal()
+
+        m.submodules.rom_rp = rom_rp = self.rom.read_port(domain="sync")
+
+        m.d.comb += [
+            src_x.eq(self.i.x[3:10]),
+            src_y.eq(self.i.y[3:10]),
+            pix_idx.eq((src_y << 7) + src_x),
+            in_range.eq(
+                self.i.de
+                & (self.i.x >= 0)
+                & (self.i.y >= 0)
+                & (self.i.x < self.OUT_W)
+                & (self.i.y < self.OUT_H)
+            ),
+            rom_rp.addr.eq(pix_idx),
+        ]
+
+        m.d.sync += in_range_d.eq(in_range)
+
+        with m.If(in_range_d):
+            m.d.sync += [
+                self.o.r.eq(rom_rp.data[16:24]),
+                self.o.g.eq(rom_rp.data[8:16]),
+                self.o.b.eq(rom_rp.data[0:8]),
+            ]
+        with m.Else():
+            m.d.sync += [
+                self.o.r.eq(0),
+                self.o.g.eq(0),
+                self.o.b.eq(0),
+            ]
+
+        return m
+
+
 class BeamRaceTop(Elaboratable):
 
     """
@@ -424,9 +522,10 @@ class BeamRaceTop(Elaboratable):
 
 # Different beamrace cores that can be selected using e.g. `pdm beamracer build --core=stripes`.
 CORES = {
-    "stripes":   Stripes,
-    "balls":     Balls,
-    "checkers":  Checkers,
+    "stripes": Stripes,
+    "balls": Balls,
+    "checkers": Checkers,
+    "euro_vid_rack": EuroVidRack,
 }
 
 def simulation_ports(fragment):

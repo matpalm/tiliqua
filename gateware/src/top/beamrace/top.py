@@ -423,9 +423,7 @@ class EuroVidRack(wiring.Component):
         show_original_d = Signal()
         in2_unsigned = Signal(unsigned(ASQ.width))
         feedback_px = Signal(8)
-        fb_r = Signal(8)
-        fb_g = Signal(8)
-        rx_phase = Signal(range(3), init=0)
+        rx_plane = Signal(range(3), init=0)
         audio_tick_d = Signal()
         audio_tick_rise = Signal()
         rx_sync = Signal()
@@ -435,6 +433,9 @@ class EuroVidRack(wiring.Component):
             domain="sync"
         )
         m.submodules.feedback_rp = feedback_rp = self.feedback_img.read_port(
+            domain="sync"
+        )
+        m.submodules.feedback_mod_rp = feedback_mod_rp = self.feedback_img.read_port(
             domain="sync"
         )
         m.submodules.feedback_wp = feedback_wp = self.feedback_img.write_port(
@@ -462,9 +463,32 @@ class EuroVidRack(wiring.Component):
             audio_tick_rise.eq(self.i.audio_tick ^ audio_tick_d),
             original_rp.addr.eq(pix_idx),
             feedback_rp.addr.eq(pix_idx),
+            feedback_mod_rp.addr.eq(fb_idx),
             feedback_wp.addr.eq(fb_idx),
-            feedback_wp.data.eq(Cat(feedback_px, fb_g, fb_r)),
-            feedback_wp.en.eq(audio_tick_rise & rx_locked & ~rx_sync & (rx_phase == 2)),
+            feedback_wp.data.eq(
+                Mux(
+                    rx_plane == 0,
+                    Cat(
+                        feedback_mod_rp.data[0:8],
+                        feedback_mod_rp.data[8:16],
+                        feedback_px,
+                    ),
+                    Mux(
+                        rx_plane == 1,
+                        Cat(
+                            feedback_mod_rp.data[0:8],
+                            feedback_px,
+                            feedback_mod_rp.data[16:24],
+                        ),
+                        Cat(
+                            feedback_px,
+                            feedback_mod_rp.data[8:16],
+                            feedback_mod_rp.data[16:24],
+                        ),
+                    ),
+                )
+            ),
+            feedback_wp.en.eq(audio_tick_rise & rx_locked & ~rx_sync),
         ]
 
         m.d.sync += [
@@ -478,25 +502,17 @@ class EuroVidRack(wiring.Component):
                 m.d.sync += [
                     rx_locked.eq(1),
                     fb_idx.eq(0),
-                    rx_phase.eq(0),
+                    rx_plane.eq(0),
                 ]
             with m.Elif(rx_locked):
-                with m.If(rx_phase == 0):
-                    m.d.sync += [
-                        fb_r.eq(feedback_px),
-                        rx_phase.eq(1),
-                    ]
-                with m.Elif(rx_phase == 1):
-                    m.d.sync += [
-                        fb_g.eq(feedback_px),
-                        rx_phase.eq(2),
-                    ]
-                with m.Else():
-                    m.d.sync += rx_phase.eq(0)
-                    with m.If(fb_idx == (self.IMAGE_W * self.IMAGE_H - 1)):
-                        m.d.sync += fb_idx.eq(0)
+                with m.If(fb_idx == (self.IMAGE_W * self.IMAGE_H - 1)):
+                    m.d.sync += fb_idx.eq(0)
+                    with m.If(rx_plane == 2):
+                        m.d.sync += rx_plane.eq(0)
                     with m.Else():
-                        m.d.sync += fb_idx.eq(fb_idx + 1)
+                        m.d.sync += rx_plane.eq(rx_plane + 1)
+                with m.Else():
+                    m.d.sync += fb_idx.eq(fb_idx + 1)
 
         with m.If(in_range_d):
             m.d.sync += self.original_r.eq(original_rp.data[16:24])
@@ -605,7 +621,7 @@ class BeamRaceTop(Elaboratable):
         tx_sample = Signal(signed(ASQ.width))
         tx_sync = Signal(signed(ASQ.width))
         tx_send_sync = Signal(init=1)
-        tx_phase = Signal(range(3), init=0)
+        tx_plane = Signal(range(3), init=0)
         tx_idx = Signal(
             range(self._serial_depth if self._serial_depth is not None else 2), init=0
         )
@@ -618,10 +634,10 @@ class BeamRaceTop(Elaboratable):
                 serial_rgb_rp.addr.eq(tx_idx),
                 tx_byte.eq(
                     Mux(
-                        tx_phase == 0,
+                        tx_plane == 0,
                         serial_rgb_rp.data[16:24],
                         Mux(
-                            tx_phase == 1,
+                            tx_plane == 1,
                             serial_rgb_rp.data[8:16],
                             serial_rgb_rp.data[0:8],
                         ),
@@ -640,23 +656,22 @@ class BeamRaceTop(Elaboratable):
             with m.If(tx_send_sync):
                 m.d.sync += [
                     tx_send_sync.eq(0),
-                    tx_phase.eq(0),
+                    tx_plane.eq(0),
+                    tx_idx.eq(0),
                 ]
             with m.Else():
                 if self._serial_depth is not None:
-                    with m.If(tx_phase == 0):
-                        m.d.sync += tx_phase.eq(1)
-                    with m.Elif(tx_phase == 1):
-                        m.d.sync += tx_phase.eq(2)
-                    with m.Else():
-                        m.d.sync += tx_phase.eq(0)
-                        with m.If(tx_idx == (self._serial_depth - 1)):
+                    with m.If(tx_idx == (self._serial_depth - 1)):
+                        m.d.sync += tx_idx.eq(0)
+                        with m.If(tx_plane == 2):
                             m.d.sync += [
-                                tx_idx.eq(0),
+                                tx_plane.eq(0),
                                 tx_send_sync.eq(1),
                             ]
                         with m.Else():
-                            m.d.sync += tx_idx.eq(tx_idx + 1)
+                            m.d.sync += tx_plane.eq(tx_plane + 1)
+                    with m.Else():
+                        m.d.sync += tx_idx.eq(tx_idx + 1)
 
         m.d.comb += [
             # 0 -> -32768, 255 -> +32767 (for ASQ.width=16)

@@ -388,11 +388,13 @@ class EuroVidRack(wiring.Component):
         packed_pixels = [
             (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2]) for px in pixels
         ]
+
         self.original_img = Memory(
             width=24,
             depth=self.IMAGE_W * self.IMAGE_H,
             init=packed_pixels,
         )
+
         self.feedback_img = Memory(
             width=24,
             depth=self.IMAGE_W * self.IMAGE_H,
@@ -403,28 +405,59 @@ class EuroVidRack(wiring.Component):
 
         m = Module()
 
-        # Keep synchronized copies of audio channels available in this core.
+        # keep sync'd copies of audio. is this the correct way to do it?
         audio_sync = [Signal(signed(16), name=f"audio_sync_{ch}") for ch in range(4)]
         for ch in range(4):
             m.d.sync += audio_sync[ch].eq(getattr(self.i, f"audio_in{ch}"))
 
+        # x / y within original img
         src_x = Signal(range(self.IMAGE_W))
         src_y = Signal(range(self.IMAGE_H))
+
+        # idx for original vs feedback img for memory reads
+        # pix_idx = src_y * W + src_X
         pix_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
+
+        # address for the feedback writer
         fb_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
+
+        # in_range and signal delayed by 1 ( aligned to memory )
         in_range = Signal()
         in_range_d = Signal()
+
+        # whether we are showing the fixed original or the feedback
         show_original = Signal()
         show_original_d = Signal()
+
+        # which of the delayed signals to use;
+        #  0 -> no delay,
+        #  1 -> delay 1 sample
+        #  2 -> delay 2 samples
         rx_delay_sel = Signal(range(3), init=1)
-        rx_data = Signal(signed(16))
+
+        # copies of in2 delayed by 1 and 2 samples
         rx_data_d1 = Signal(signed(16))
         rx_data_d2 = Signal(signed(16))
+
+        # effective received sample ( after being delayed 0, 1, or
+        # 2 samples based on rx_delay_sel
+        rx_data = Signal(signed(16))
+
+        # unsigned version of feedback loop
         in2_unsigned = Signal(unsigned(ASQ.width))
+
+        # feedback 8bit pixel converted from in2_unsigned
         feedback_px = Signal(8)
+
+        # which plane, RG or B, is being processed
         rx_plane = Signal(range(3), init=0)
+
+        # one cycle delayed version of audio_tick
         audio_tick_d = Signal()
+
+        # per sample strobe
         audio_tick_rise = Signal()
+
         rx_sync = Signal()
         rx_locked = Signal(init=0)
 
@@ -453,11 +486,10 @@ class EuroVidRack(wiring.Component):
                 & (self.i.y < self.OUT_H)
             ),
             show_original.eq(audio_sync[1] > 0),
-            # Runtime delay tuning for input channel 3 payload (in3).
-            # Drive audio_in0 to choose delay taps:
-            #   > +0.25FS -> 0 samples delay
-            #   [-0.25FS, +0.25FS] -> 1 sample delay (default)
-            #   < -0.25FS -> 2 samples delay
+            # manual delay tuning read from in0
+            # (-1, -0.25) => 2 sample delay
+            # (-0.25, 0.25) => 1 sample delay
+            # (0.25, 1) => no delay
             rx_data.eq(
                 Mux(
                     rx_delay_sel == 0,

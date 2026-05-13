@@ -57,19 +57,23 @@ class BeamRaceInputs(wiring.Signature):
     Inputs into a beamracing core, all in the 'dvi' domain (at the pixel clock).
     """
     def __init__(self):
-        super().__init__({
-            # Video timing inputs
-            "hsync":     Out(1),
-            "vsync":     Out(1),
-            "de":        Out(1),
-            "x":         Out(signed(12)),
-            "y":         Out(signed(12)),
-            # Audio samples (already synchronized to DVI domain)
-            "audio_in0": Out(signed(16)),
-            "audio_in1": Out(signed(16)),
-            "audio_in2": Out(signed(16)),
-            "audio_in3": Out(signed(16)),
-        })
+        super().__init__(
+            {
+                # Video timing inputs
+                "hsync": Out(1),
+                "vsync": Out(1),
+                "de": Out(1),
+                "x": Out(signed(12)),
+                "y": Out(signed(12)),
+                # Pulses (via toggle edge detect) once per audio sample handshake.
+                "audio_tick": Out(1),
+                # Audio samples (already synchronized to DVI domain)
+                "audio_in0": Out(signed(16)),
+                "audio_in1": Out(signed(16)),
+                "audio_in2": Out(signed(16)),
+                "audio_in3": Out(signed(16)),
+            }
+        )
 
 class BeamRaceOutputs(wiring.Signature):
     """
@@ -372,9 +376,11 @@ class EuroVidRack(wiring.Component):
     SCALE = 8
     OUT_W = IMAGE_W * SCALE
     OUT_H = IMAGE_H * SCALE
+    SERIAL_SYNC_MARKER = 0
 
     def __init__(self):
         super().__init__()
+        self.original_r = Signal(8)
 
         image_path = os.path.join(os.path.dirname(__file__), "euro_128.png")
         img = Image.open(image_path).convert("RGB")
@@ -387,10 +393,15 @@ class EuroVidRack(wiring.Component):
         packed_pixels = [
             (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2]) for px in pixels
         ]
-        self.rom = Memory(
+        self.original_img = Memory(
             width=24,
             depth=self.IMAGE_W * self.IMAGE_H,
             init=packed_pixels,
+        )
+        self.feedback_img = Memory(
+            width=24,
+            depth=self.IMAGE_W * self.IMAGE_H,
+            init=[0 for _ in range(self.IMAGE_W * self.IMAGE_H)],
         )
 
     def elaborate(self, platform):
@@ -405,10 +416,30 @@ class EuroVidRack(wiring.Component):
         src_x = Signal(range(self.IMAGE_W))
         src_y = Signal(range(self.IMAGE_H))
         pix_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
+        fb_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
         in_range = Signal()
         in_range_d = Signal()
+        show_original = Signal()
+        show_original_d = Signal()
+        in2_unsigned = Signal(unsigned(ASQ.width))
+        feedback_px = Signal(8)
+        fb_r = Signal(8)
+        fb_g = Signal(8)
+        rx_phase = Signal(range(3), init=0)
+        audio_tick_d = Signal()
+        audio_tick_rise = Signal()
+        rx_sync = Signal()
+        rx_locked = Signal(init=0)
 
-        m.submodules.rom_rp = rom_rp = self.rom.read_port(domain="sync")
+        m.submodules.original_rp = original_rp = self.original_img.read_port(
+            domain="sync"
+        )
+        m.submodules.feedback_rp = feedback_rp = self.feedback_img.read_port(
+            domain="sync"
+        )
+        m.submodules.feedback_wp = feedback_wp = self.feedback_img.write_port(
+            domain="sync"
+        )
 
         m.d.comb += [
             src_x.eq(self.i.x[3:10]),
@@ -421,19 +452,72 @@ class EuroVidRack(wiring.Component):
                 & (self.i.x < self.OUT_W)
                 & (self.i.y < self.OUT_H)
             ),
-            rom_rp.addr.eq(pix_idx),
+            show_original.eq(audio_sync[1] > 0),
+            # Inverse of BeamRaceTop's image-byte serialization on channel 3:
+            # out = (pixel * 257) - 32768  =>  pixel = ((in + 32768) >> 8).
+            in2_unsigned.eq(audio_sync[2] + (1 << (ASQ.width - 1))),
+            feedback_px.eq(in2_unsigned[8:16]),
+            # Sync channel is input channel 4 (index 3): positive pulse marks frame start.
+            rx_sync.eq(audio_sync[3] > 0),
+            audio_tick_rise.eq(self.i.audio_tick ^ audio_tick_d),
+            original_rp.addr.eq(pix_idx),
+            feedback_rp.addr.eq(pix_idx),
+            feedback_wp.addr.eq(fb_idx),
+            feedback_wp.data.eq(Cat(feedback_px, fb_g, fb_r)),
+            feedback_wp.en.eq(audio_tick_rise & rx_locked & ~rx_sync & (rx_phase == 2)),
         ]
 
-        m.d.sync += in_range_d.eq(in_range)
+        m.d.sync += [
+            in_range_d.eq(in_range),
+            show_original_d.eq(show_original),
+            audio_tick_d.eq(self.i.audio_tick),
+        ]
+
+        with m.If(audio_tick_rise):
+            with m.If(rx_sync):
+                m.d.sync += [
+                    rx_locked.eq(1),
+                    fb_idx.eq(0),
+                    rx_phase.eq(0),
+                ]
+            with m.Elif(rx_locked):
+                with m.If(rx_phase == 0):
+                    m.d.sync += [
+                        fb_r.eq(feedback_px),
+                        rx_phase.eq(1),
+                    ]
+                with m.Elif(rx_phase == 1):
+                    m.d.sync += [
+                        fb_g.eq(feedback_px),
+                        rx_phase.eq(2),
+                    ]
+                with m.Else():
+                    m.d.sync += rx_phase.eq(0)
+                    with m.If(fb_idx == (self.IMAGE_W * self.IMAGE_H - 1)):
+                        m.d.sync += fb_idx.eq(0)
+                    with m.Else():
+                        m.d.sync += fb_idx.eq(fb_idx + 1)
 
         with m.If(in_range_d):
+            m.d.sync += self.original_r.eq(original_rp.data[16:24])
             m.d.sync += [
-                self.o.r.eq(rom_rp.data[16:24]),
-                self.o.g.eq(rom_rp.data[8:16]),
-                self.o.b.eq(rom_rp.data[0:8]),
+                self.o.r.eq(
+                    Mux(
+                        show_original_d,
+                        original_rp.data[16:24],
+                        feedback_rp.data[16:24],
+                    )
+                ),
+                self.o.g.eq(
+                    Mux(show_original_d, original_rp.data[8:16], feedback_rp.data[8:16])
+                ),
+                self.o.b.eq(
+                    Mux(show_original_d, original_rp.data[0:8], feedback_rp.data[0:8])
+                ),
             ]
         with m.Else():
             m.d.sync += [
+                self.original_r.eq(0),
                 self.o.r.eq(0),
                 self.o.g.eq(0),
                 self.o.b.eq(0),
@@ -459,6 +543,23 @@ class BeamRaceTop(Elaboratable):
         self.pmod0 = eurorack_pmod.EurorackPmod(self.clock_settings.audio_clock)
         self.dvi_tgen = dvi.DVITimingGen()
         self._beamrace_core_cls = beamrace_core
+
+        self._serial_depth = None
+        self.serial_original_rgb = None
+        if beamrace_core is EuroVidRack:
+            image_path = os.path.join(os.path.dirname(__file__), "euro_128.png")
+            img = Image.open(image_path).convert("RGB")
+            arr = np.asarray(img, dtype=np.uint8)
+            self._serial_depth = arr.shape[0] * arr.shape[1]
+            packed_pixels = [
+                (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2])
+                for px in arr.reshape(-1, 3)
+            ]
+            self.serial_original_rgb = Memory(
+                width=24,
+                depth=self._serial_depth,
+                init=packed_pixels,
+            )
 
         # Instantiate the provided beamracing core, for us to wrap it
         self.core = DomainRenamer("dvi")(beamrace_core())
@@ -495,31 +596,95 @@ class BeamRaceTop(Elaboratable):
         # Beamracer core itself
         m.submodules.core = core = self.core
 
-        # Audio routing: channel 0 is serialized video red channel mapped
-        # from [0, 255] to signed ASQ full-scale [-1, 1], channels 1-3 passthrough.
-        red_sync = Signal(8)
-        red_audio = Signal(signed(ASQ.width))
-        m.submodules += FFSynchronizer(
-            i=core.o.r,
-            o=red_sync,
-            o_domain="sync",
+        # Audio routing: channel 0 serializes original image red channel in
+        # audio-sample cadence (RGB time-multiplexed); channels 1-3 are passthrough.
+        sample_stb = Signal()
+        audio_tick_toggle = Signal()
+        tx_byte = Signal(8)
+        tx_audio = Signal(signed(ASQ.width))
+        tx_sample = Signal(signed(ASQ.width))
+        tx_sync = Signal(signed(ASQ.width))
+        tx_send_sync = Signal(init=1)
+        tx_phase = Signal(range(3), init=0)
+        tx_idx = Signal(
+            range(self._serial_depth if self._serial_depth is not None else 2), init=0
         )
+
+        if self.serial_original_rgb is not None:
+            m.submodules.serial_rgb_rp = serial_rgb_rp = (
+                self.serial_original_rgb.read_port(domain="sync")
+            )
+            m.d.comb += [
+                serial_rgb_rp.addr.eq(tx_idx),
+                tx_byte.eq(
+                    Mux(
+                        tx_phase == 0,
+                        serial_rgb_rp.data[16:24],
+                        Mux(
+                            tx_phase == 1,
+                            serial_rgb_rp.data[8:16],
+                            serial_rgb_rp.data[0:8],
+                        ),
+                    )
+                ),
+            ]
+        elif hasattr(core, "original_r"):
+            m.d.comb += tx_byte.eq(core.original_r)
+        else:
+            m.d.comb += tx_byte.eq(core.o.r)
+
+        m.d.comb += sample_stb.eq(pmod0.o_cal.valid & pmod0.i_cal.ready)
+
+        with m.If(sample_stb):
+            m.d.sync += audio_tick_toggle.eq(~audio_tick_toggle)
+            with m.If(tx_send_sync):
+                m.d.sync += [
+                    tx_send_sync.eq(0),
+                    tx_phase.eq(0),
+                ]
+            with m.Else():
+                if self._serial_depth is not None:
+                    with m.If(tx_phase == 0):
+                        m.d.sync += tx_phase.eq(1)
+                    with m.Elif(tx_phase == 1):
+                        m.d.sync += tx_phase.eq(2)
+                    with m.Else():
+                        m.d.sync += tx_phase.eq(0)
+                        with m.If(tx_idx == (self._serial_depth - 1)):
+                            m.d.sync += [
+                                tx_idx.eq(0),
+                                tx_send_sync.eq(1),
+                            ]
+                        with m.Else():
+                            m.d.sync += tx_idx.eq(tx_idx + 1)
 
         m.d.comb += [
             # 0 -> -32768, 255 -> +32767 (for ASQ.width=16)
-            red_audio.eq((red_sync * 257) - (1 << (ASQ.width - 1))),
+            tx_audio.eq((tx_byte * 257) - (1 << (ASQ.width - 1))),
+            tx_sample.eq(tx_audio),
+            # Sync stream on output channel 4 (index 3):
+            # +FS for sync sample, -FS otherwise.
+            tx_sync.eq(
+                Mux(tx_send_sync, (1 << (ASQ.width - 1)) - 1, -(1 << (ASQ.width - 1)))
+            ),
             pmod0.i_cal.valid.eq(pmod0.o_cal.valid),
             pmod0.o_cal.ready.eq(pmod0.i_cal.ready),
-            pmod0.i_cal.payload[0].eq(red_audio),
+            # out1/out2 passthrough, out3 image data, out4 sync framing.
+            pmod0.i_cal.payload[0].eq(pmod0.o_cal.payload[0]),
             pmod0.i_cal.payload[1].eq(pmod0.o_cal.payload[1]),
-            pmod0.i_cal.payload[2].eq(pmod0.o_cal.payload[2]),
-            pmod0.i_cal.payload[3].eq(pmod0.o_cal.payload[3]),
+            pmod0.i_cal.payload[2].eq(tx_sample),
+            pmod0.i_cal.payload[3].eq(tx_sync),
         ]
 
         # Synchronize audio inputs into DVI domain and provide them to the beamracer core.
         for ch in range(4):
             m.submodules += FFSynchronizer(
                     i=pmod0.o_cal.payload[ch].as_value(), o=getattr(core.i, f"audio_in{ch}"), o_domain="dvi")
+        m.submodules += FFSynchronizer(
+            i=audio_tick_toggle,
+            o=core.i.audio_tick,
+            o_domain="dvi",
+        )
 
         # Hook up the remaining beamracer inputs (already in DVI domain)
         m.d.comb += [

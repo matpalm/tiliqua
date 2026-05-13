@@ -48,10 +48,10 @@ class NeuralWaveshaper(wiring.Component):
     bitstream_help = BitstreamHelp(
         brief="Neural waveshaper.",
         io_left=[
-            "core wave",
+            "core sine wave",
+            "core cosine wave",
             "embedding x",
             "embedding y",
-            "",
             "waveshaped",
             "",
             "",
@@ -80,14 +80,14 @@ class NeuralWaveshaper(wiring.Component):
         # note: model is currently (x, e0, e1, 0)
         # ( with an expected 0 values for in3 )
         model_input = Array(Signal(NNQ, name=f"model_input_k{k}") for k in range(4))
-        for c in range(3):
+        for c in range(4):
             m.d.comb += [
                 model_input[c].eq(self.i.payload[c]),
                 self.qb_model.i.payload[c].eq(model_input[c]),
             ]
-        m.d.comb += [
-            self.qb_model.i.payload[3].eq(0),
-        ]
+        # m.d.comb += [
+        #     self.qb_model.i.payload[3].eq(0),
+        # ]
 
         # The model only outputs one value (on out0),
         # saturate to ASQ and output a filtered and unfiltered version

@@ -65,8 +65,7 @@ class BeamRaceInputs(wiring.Signature):
                 "de": Out(1),
                 "x": Out(signed(12)),
                 "y": Out(signed(12)),
-                # a pulse once per audio sample handshake
-                # TODO: i think this is being handled in the wrong place?
+                # Pulse once per audio sample handshake.
                 "audio_tick": Out(1),
                 # Audio samples (already synchronized to DVI domain)
                 "audio_in0": Out(signed(16)),
@@ -372,6 +371,7 @@ class EuroVidRack(wiring.Component):
     SCALE = 8
     OUT_W = IMAGE_W * SCALE
     OUT_H = IMAGE_H * SCALE
+    SERIAL_SYNC_BURST = 8
     # SERIAL_SYNC_MARKER = 0
     # FEEDBACK_COLOUR_SPACE = "YUV"
     # FEEDBACK_COLOUR_SPACE = "RGB"
@@ -393,10 +393,7 @@ class EuroVidRack(wiring.Component):
             (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2]) for px in pixels
         ]
 
-        # create two memories; one for the static image and the other
-        # to hold the img post euro processing.
-        # TODO: i think it's better to pack RGB into one 24bit value than to
-        #       manage 3 memories.
+        # Store the static source image and the mutable feedback image.
         self.original_img = Memory(
             width=8 * 3,
             depth=self.IMAGE_W * self.IMAGE_H,
@@ -408,12 +405,16 @@ class EuroVidRack(wiring.Component):
             init=[0 for _ in range(self.IMAGE_W * self.IMAGE_H)],
         )
 
+        # Exported serialized image stream for BeamRaceTop audio TX.
+        self.serial_tx_byte = Signal(8)
+        self.serial_tx_sync_active = Signal()
+
     def elaborate(self, platform):
 
         m = Module()
         # use_yuv = self.FEEDBACK_COLOUR_SPACE == "YUV"
 
-        # keep sync'd copies of audio. is this the correct way to do it?
+        # Keep synchronized copies of audio inputs in the local sync domain.
         audio_sync = [Signal(signed(16), name=f"audio_sync_{ch}") for ch in range(4)]
         for ch in range(4):
             m.d.sync += audio_sync[ch].eq(getattr(self.i, f"audio_in{ch}"))
@@ -422,15 +423,14 @@ class EuroVidRack(wiring.Component):
         src_x = Signal(range(self.IMAGE_W))
         src_y = Signal(range(self.IMAGE_H))
 
-        # idx for original vs feedback img for memory reads
+        # Flattened pixel index for image memory reads.
         # pix_idx = src_y * W + src_X
         pix_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
 
         # address for the feedback writer
         fb_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
 
-        # in_range and signal delayed by 1 ( aligned to memory )
-        # TODO: i think the need for in_range_d, for the memory alignment, means i'm missing something?
+        # Delay display valid by one cycle to match synchronous RAM read latency.
         in_range = Signal()
         in_range_d = Signal()
 
@@ -485,14 +485,22 @@ class EuroVidRack(wiring.Component):
         rx_sync = Signal()
         rx_locked = Signal(init=0)
 
-        # we only ever read from original img
+        # serializer state for original image -> audio stream
+        tx_plane = Signal(range(3), init=0)
+        tx_idx = Signal(range(self.IMAGE_W * self.IMAGE_H), init=0)
+        tx_sync_count = Signal(
+            range(self.SERIAL_SYNC_BURST + 1), init=self.SERIAL_SYNC_BURST
+        )
+
+        # read original image for both display and serializer
         m.submodules.original_rp = original_rp = self.original_img.read_port(
             domain="sync"
         )
+        m.submodules.original_tx_rp = original_tx_rp = self.original_img.read_port(
+            domain="sync"
+        )
 
-        # but we read and write to feedback_img
-        # further we read from two places; one for the display ( feedback_display_rp ) another for the
-        # write back ( feedback_modify_rp )
+        # Feedback image uses independent read ports for display and read-modify-write.
         m.submodules.feedback_display_rp = feedback_display_rp = (
             self.feedback_img.read_port(domain="sync")
         )
@@ -537,8 +545,9 @@ class EuroVidRack(wiring.Component):
             # sync channel
             rx_sync.eq(audio_sync[3] > 0),
             audio_tick_rise.eq(self.i.audio_tick ^ audio_tick_d),
-            # setup read and writes for original and feedback images
+            # Set up image read/write addresses.
             original_rp.addr.eq(pix_idx),
+            original_tx_rp.addr.eq(tx_idx),
             feedback_display_rp.addr.eq(pix_idx),
             feedback_modify_rp.addr.eq(fb_idx),
             feedback_wp.addr.eq(fb_idx),
@@ -566,6 +575,18 @@ class EuroVidRack(wiring.Component):
                 )
             ),
             feedback_wp.en.eq(audio_tick_rise & rx_locked & ~rx_sync),
+            self.serial_tx_byte.eq(
+                Mux(
+                    tx_plane == 0,
+                    original_tx_rp.data[16:24],
+                    Mux(
+                        tx_plane == 1,
+                        original_tx_rp.data[8:16],
+                        original_tx_rp.data[0:8],
+                    ),
+                )
+            ),
+            self.serial_tx_sync_active.eq(tx_sync_count != 0),
         ]
 
         # if use_yuv:
@@ -592,7 +613,7 @@ class EuroVidRack(wiring.Component):
             rx_data_d2.eq(rx_data_d1),
         ]
 
-        # decide how much of the latecny delay to use based on in0; 0, 1 or 2 frames
+        # choose receive delay based on in0: 0, 1, or 2 samples.
         with m.If(audio_sync[0] > (1 << (ASQ.width - 3))):
             m.d.sync += rx_delay_sel.eq(0)
         with m.Elif(audio_sync[0] < -(1 << (ASQ.width - 3))):
@@ -600,9 +621,23 @@ class EuroVidRack(wiring.Component):
         with m.Else():
             m.d.sync += rx_delay_sel.eq(1)
 
-        # audio tick and whether we are syncing; and how we're
-        # advancing to next plane
+        # advance serializer state and feedback write position on each audio tick.
         with m.If(audio_tick_rise):
+            with m.If(tx_sync_count != 0):
+                m.d.sync += tx_sync_count.eq(tx_sync_count - 1)
+            with m.Else():
+                with m.If(tx_idx == (self.IMAGE_W * self.IMAGE_H - 1)):
+                    m.d.sync += tx_idx.eq(0)
+                    with m.If(tx_plane == 2):
+                        m.d.sync += [
+                            tx_plane.eq(0),
+                            tx_sync_count.eq(self.SERIAL_SYNC_BURST),
+                        ]
+                    with m.Else():
+                        m.d.sync += tx_plane.eq(tx_plane + 1)
+                with m.Else():
+                    m.d.sync += tx_idx.eq(tx_idx + 1)
+
             with m.If(rx_sync):
                 m.d.sync += [
                     rx_locked.eq(1),
@@ -684,26 +719,7 @@ class BeamRaceTop(Elaboratable):
         self.dvi_tgen = dvi.DVITimingGen()
         self._beamrace_core_cls = beamrace_core
 
-        self.serial_depth = None
-        self.serial_original_rgb = None
         self.serial_sync_burst = 8
-
-        # self._serial_colour_space = "RGB"
-        if beamrace_core is EuroVidRack:
-            # self._serial_colour_space = EuroVidRack.FEEDBACK_COLOUR_SPACE
-            image_path = os.path.join(os.path.dirname(__file__), "euro_128.png")
-            img = Image.open(image_path).convert("RGB")
-            arr = np.asarray(img, dtype=np.uint8)
-            self.serial_depth = arr.shape[0] * arr.shape[1]
-            packed_pixels = [
-                (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2])
-                for px in arr.reshape(-1, 3)
-            ]
-            self.serial_original_rgb = Memory(
-                width=8 * 3,
-                depth=self.serial_depth,
-                init=packed_pixels,
-            )
 
         # Instantiate the provided beamracing core, for us to wrap it
         self.core = DomainRenamer("dvi")(beamrace_core())
@@ -740,8 +756,7 @@ class BeamRaceTop(Elaboratable):
         # Beamracer core itself
         m.submodules.core = core = self.core
 
-        # Audio routing: out3 serializes RGB
-        # out4 carries sync framing.
+        # Audio routing: channel 3 carries serialized image bytes, channel 4 carries sync framing.
         sample_stb = Signal()
         audio_tick_toggle = Signal()
         tx_byte = Signal(8)
@@ -759,51 +774,29 @@ class BeamRaceTop(Elaboratable):
         tx_sync_count = Signal(
             range(self.serial_sync_burst + 1), init=self.serial_sync_burst
         )
-        tx_plane = Signal(range(3), init=0)
-        tx_idx = Signal(
-            range(self.serial_depth if self.serial_depth is not None else 2), init=0
-        )
+        tx_sync_active = Signal()
 
-        if self.serial_original_rgb is not None:
-            m.submodules.serial_rgb_rp = serial_rgb_rp = (
-                self.serial_original_rgb.read_port(domain="sync")
-            )
+        has_core_serializer = hasattr(core, "serial_tx_byte") and hasattr(
+            core, "serial_tx_sync_active"
+        )
+        if has_core_serializer:
             m.d.comb += [
-                serial_rgb_rp.addr.eq(tx_idx),
-                tx_byte.eq(
-                    Mux(
-                        tx_plane == 0,
-                        serial_rgb_rp.data[16:24],
-                        Mux(
-                            tx_plane == 1,
-                            serial_rgb_rp.data[8:16],
-                            serial_rgb_rp.data[0:8],
-                        ),
-                    )
-                ),
+                tx_byte.eq(core.serial_tx_byte),
+                tx_sync_active.eq(core.serial_tx_sync_active),
             ]
         else:
-            m.d.comb += tx_byte.eq(core.o.r)
+            m.d.comb += [
+                tx_byte.eq(core.o.r),
+                tx_sync_active.eq(tx_sync_count != 0),
+            ]
 
         m.d.comb += sample_stb.eq(pmod0.o_cal.valid & pmod0.i_cal.ready)
 
         with m.If(sample_stb):
             m.d.sync += audio_tick_toggle.eq(~audio_tick_toggle)
-            with m.If(tx_sync_count != 0):
-                m.d.sync += tx_sync_count.eq(tx_sync_count - 1)
-            with m.Else():
-                if self.serial_depth is not None:
-                    with m.If(tx_idx == (self.serial_depth - 1)):
-                        m.d.sync += tx_idx.eq(0)
-                        with m.If(tx_plane == 2):
-                            m.d.sync += [
-                                tx_plane.eq(0),
-                                tx_sync_count.eq(self.serial_sync_burst),
-                            ]
-                        with m.Else():
-                            m.d.sync += tx_plane.eq(tx_plane + 1)
-                    with m.Else():
-                        m.d.sync += tx_idx.eq(tx_idx + 1)
+            if not has_core_serializer:
+                with m.If(tx_sync_count != 0):
+                    m.d.sync += tx_sync_count.eq(tx_sync_count - 1)
 
         # 0 -> -32768, 255 -> +32767 (for ASQ.width=16)
         signed_midpt_offset = 1 << (ASQ.width - 1)
@@ -811,12 +804,12 @@ class BeamRaceTop(Elaboratable):
         m.d.comb += [
             tx_audio.eq((tx_byte * 257) - signed_midpt_offset),
             # Hold data channel at 0 during sync burst.
-            tx_sample.eq(Mux(tx_sync_count != 0, 0, tx_audio)),
+            tx_sample.eq(Mux(tx_sync_active, 0, tx_audio)),
             # Sync stream on output channel 4 (index 3):
             # +FS for sync burst, -FS otherwise.
             tx_sync.eq(
                 Mux(
-                    tx_sync_count != 0,
+                    tx_sync_active,
                     signed_midpt_offset - 1,
                     -signed_midpt_offset,
                 )

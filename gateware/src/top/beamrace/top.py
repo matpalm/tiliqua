@@ -65,7 +65,8 @@ class BeamRaceInputs(wiring.Signature):
                 "de": Out(1),
                 "x": Out(signed(12)),
                 "y": Out(signed(12)),
-                # Pulses (via toggle edge detect) once per audio sample handshake.
+                # a pulse once per audio sample handshake
+                # TODO: i think this is being handled in the wrong place?
                 "audio_tick": Out(1),
                 # Audio samples (already synchronized to DVI domain)
                 "audio_in0": Out(signed(16)),
@@ -371,16 +372,14 @@ class EuroVidRack(wiring.Component):
     SCALE = 8
     OUT_W = IMAGE_W * SCALE
     OUT_H = IMAGE_H * SCALE
-    SERIAL_SYNC_MARKER = 0
+    # SERIAL_SYNC_MARKER = 0
     # FEEDBACK_COLOUR_SPACE = "YUV"
     # FEEDBACK_COLOUR_SPACE = "RGB"
-
-    BITS = 1
-    assert BITS >= 1 and BITS <= 8
 
     def __init__(self):
         super().__init__()
 
+        # load static test image
         image_path = os.path.join(os.path.dirname(__file__), "euro_128.png")
         img = Image.open(image_path).convert("RGB")
         if img.size != (self.IMAGE_W, self.IMAGE_H):
@@ -388,19 +387,23 @@ class EuroVidRack(wiring.Component):
                 f"expected {image_path} to be {self.IMAGE_W}x{self.IMAGE_H}, got {img.size}"
             )
 
+        # flatten to (xy, 3) uint8 & pack into 8x3=24 bits
         pixels = np.asarray(img, dtype=np.uint8).reshape(-1, 3)
         packed_pixels = [
             (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2]) for px in pixels
         ]
 
+        # create two memories; one for the static image and the other
+        # to hold the img post euro processing.
+        # TODO: i think it's better to pack RGB into one 24bit value than to
+        #       manage 3 memories.
         self.original_img = Memory(
-            width=24,
+            width=8 * 3,
             depth=self.IMAGE_W * self.IMAGE_H,
             init=packed_pixels,
         )
-
         self.feedback_img = Memory(
-            width=24,
+            width=8 * 3,
             depth=self.IMAGE_W * self.IMAGE_H,
             init=[0 for _ in range(self.IMAGE_W * self.IMAGE_H)],
         )
@@ -427,10 +430,12 @@ class EuroVidRack(wiring.Component):
         fb_idx = Signal(range(self.IMAGE_W * self.IMAGE_H))
 
         # in_range and signal delayed by 1 ( aligned to memory )
+        # TODO: i think the need for in_range_d, for the memory alignment, means i'm missing something?
         in_range = Signal()
         in_range_d = Signal()
 
         # whether we are showing the fixed original or the feedback
+        # ( show original vs feedback imaged depending on in0 >= 0 )
         show_original = Signal()
         show_original_d = Signal()
 
@@ -476,17 +481,23 @@ class EuroVidRack(wiring.Component):
         # per sample strobe
         audio_tick_rise = Signal()
 
+        # syncing signals
         rx_sync = Signal()
         rx_locked = Signal(init=0)
 
+        # we only ever read from original img
         m.submodules.original_rp = original_rp = self.original_img.read_port(
             domain="sync"
         )
-        m.submodules.feedback_rp = feedback_rp = self.feedback_img.read_port(
-            domain="sync"
+
+        # but we read and write to feedback_img
+        # further we read from two places; one for the display ( feedback_display_rp ) another for the
+        # write back ( feedback_modify_rp )
+        m.submodules.feedback_display_rp = feedback_display_rp = (
+            self.feedback_img.read_port(domain="sync")
         )
-        m.submodules.feedback_mod_rp = feedback_mod_rp = self.feedback_img.read_port(
-            domain="sync"
+        m.submodules.feedback_modify_rp = feedback_modify_rp = (
+            self.feedback_img.read_port(domain="sync")
         )
         m.submodules.feedback_wp = feedback_wp = self.feedback_img.write_port(
             domain="sync"
@@ -496,7 +507,9 @@ class EuroVidRack(wiring.Component):
             # image is 1/8 output size
             src_x.eq(self.i.x[3:10]),
             src_y.eq(self.i.y[3:10]),
+            # (x, y) -> flattened idx
             pix_idx.eq((src_y << 7) + src_x),
+            # in_range check
             in_range.eq(
                 self.i.de
                 & (self.i.x >= 0)
@@ -524,29 +537,30 @@ class EuroVidRack(wiring.Component):
             # sync channel
             rx_sync.eq(audio_sync[3] > 0),
             audio_tick_rise.eq(self.i.audio_tick ^ audio_tick_d),
+            # setup read and writes for original and feedback images
             original_rp.addr.eq(pix_idx),
-            feedback_rp.addr.eq(pix_idx),
-            feedback_mod_rp.addr.eq(fb_idx),
+            feedback_display_rp.addr.eq(pix_idx),
+            feedback_modify_rp.addr.eq(fb_idx),
             feedback_wp.addr.eq(fb_idx),
             feedback_wp.data.eq(
                 Mux(
                     rx_plane == 0,
                     Cat(
-                        feedback_mod_rp.data[0:8],
-                        feedback_mod_rp.data[8:16],
+                        feedback_modify_rp.data[0:8],
+                        feedback_modify_rp.data[8:16],
                         feedback_px,
                     ),
                     Mux(
                         rx_plane == 1,
                         Cat(
-                            feedback_mod_rp.data[0:8],
+                            feedback_modify_rp.data[0:8],
                             feedback_px,
-                            feedback_mod_rp.data[16:24],
+                            feedback_modify_rp.data[16:24],
                         ),
                         Cat(
                             feedback_px,
-                            feedback_mod_rp.data[8:16],
-                            feedback_mod_rp.data[16:24],
+                            feedback_modify_rp.data[8:16],
+                            feedback_modify_rp.data[16:24],
                         ),
                     ),
                 )
@@ -556,9 +570,9 @@ class EuroVidRack(wiring.Component):
 
         # if use_yuv:
         #     m.d.comb += [
-        #         fb_y.eq(feedback_rp.data[16:24]),
-        #         fb_u.eq(feedback_rp.data[8:16]),
-        #         fb_v.eq(feedback_rp.data[0:8]),
+        #         fb_y.eq(feedback_display_rp.data[16:24]),
+        #         fb_u.eq(feedback_display_rp.data[8:16]),
+        #         fb_v.eq(feedback_display_rp.data[0:8]),
         #         fb_d.eq(fb_u - 128),
         #         fb_e.eq(fb_v - 128),
         #         # BT.601 full-range integer approximation.
@@ -586,6 +600,8 @@ class EuroVidRack(wiring.Component):
         with m.Else():
             m.d.sync += rx_delay_sel.eq(1)
 
+        # audio tick and whether we are syncing; and how we're
+        # advancing to next plane
         with m.If(audio_tick_rise):
             with m.If(rx_sync):
                 m.d.sync += [
@@ -622,21 +638,21 @@ class EuroVidRack(wiring.Component):
                     Mux(
                         show_original_d,
                         original_rp.data[16:24],
-                        feedback_rp.data[16:24],
+                        feedback_display_rp.data[16:24],
                     )
                 ),
                 self.o.g.eq(
                     Mux(
                         show_original_d,
                         original_rp.data[8:16],
-                        feedback_rp.data[8:16],
+                        feedback_display_rp.data[8:16],
                     )
                 ),
                 self.o.b.eq(
                     Mux(
                         show_original_d,
                         original_rp.data[0:8],
-                        feedback_rp.data[0:8],
+                        feedback_display_rp.data[0:8],
                     )
                 ),
             ]
@@ -668,23 +684,24 @@ class BeamRaceTop(Elaboratable):
         self.dvi_tgen = dvi.DVITimingGen()
         self._beamrace_core_cls = beamrace_core
 
-        self._serial_depth = None
+        self.serial_depth = None
         self.serial_original_rgb = None
-        self._serial_sync_burst = 8
+        self.serial_sync_burst = 8
+
         # self._serial_colour_space = "RGB"
         if beamrace_core is EuroVidRack:
             # self._serial_colour_space = EuroVidRack.FEEDBACK_COLOUR_SPACE
             image_path = os.path.join(os.path.dirname(__file__), "euro_128.png")
             img = Image.open(image_path).convert("RGB")
             arr = np.asarray(img, dtype=np.uint8)
-            self._serial_depth = arr.shape[0] * arr.shape[1]
+            self.serial_depth = arr.shape[0] * arr.shape[1]
             packed_pixels = [
                 (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2])
                 for px in arr.reshape(-1, 3)
             ]
             self.serial_original_rgb = Memory(
-                width=24,
-                depth=self._serial_depth,
+                width=8 * 3,
+                depth=self.serial_depth,
                 init=packed_pixels,
             )
 
@@ -740,58 +757,17 @@ class BeamRaceTop(Elaboratable):
         tx_sample = Signal(signed(ASQ.width))
         tx_sync = Signal(signed(ASQ.width))
         tx_sync_count = Signal(
-            range(self._serial_sync_burst + 1), init=self._serial_sync_burst
+            range(self.serial_sync_burst + 1), init=self.serial_sync_burst
         )
         tx_plane = Signal(range(3), init=0)
         tx_idx = Signal(
-            range(self._serial_depth if self._serial_depth is not None else 2), init=0
+            range(self.serial_depth if self.serial_depth is not None else 2), init=0
         )
 
         if self.serial_original_rgb is not None:
             m.submodules.serial_rgb_rp = serial_rgb_rp = (
                 self.serial_original_rgb.read_port(domain="sync")
             )
-            # if self._serial_color_space == "YUV":
-            #     m.d.comb += [
-            #         serial_rgb_rp.addr.eq(tx_idx),
-            #         # BT.601 full-range RGB -> YUV integer approximation.
-            #         tx_y_sum.eq(
-            #             (serial_rgb_rp.data[16:24] * 77)
-            #             + (serial_rgb_rp.data[8:16] * 150)
-            #             + (serial_rgb_rp.data[0:8] * 29)
-            #         ),
-            #         tx_u_sum.eq(
-            #             -(serial_rgb_rp.data[16:24] * 43)
-            #             - (serial_rgb_rp.data[8:16] * 85)
-            #             + (serial_rgb_rp.data[0:8] * 128)
-            #         ),
-            #         tx_v_sum.eq(
-            #             (serial_rgb_rp.data[16:24] * 128)
-            #             - (serial_rgb_rp.data[8:16] * 107)
-            #             - (serial_rgb_rp.data[0:8] * 21)
-            #         ),
-            #         tx_u_tmp.eq((tx_u_sum >> 8) + 128),
-            #         tx_v_tmp.eq((tx_v_sum >> 8) + 128),
-            #         tx_y.eq(tx_y_sum[8:16]),
-            #         tx_u.eq(
-            #             Mux(tx_u_tmp < 0, 0, Mux(tx_u_tmp > 255, 255, tx_u_tmp[0:8]))
-            #         ),
-            #         tx_v.eq(
-            #             Mux(tx_v_tmp < 0, 0, Mux(tx_v_tmp > 255, 255, tx_v_tmp[0:8]))
-            #         ),
-            #         tx_byte.eq(
-            #             Mux(
-            #                 tx_plane == 0,
-            #                 tx_y,
-            #                 Mux(
-            #                     tx_plane == 1,
-            #                     tx_u,
-            #                     tx_v,
-            #                 ),
-            #             )
-            #         ),
-            #     ]
-            # else:
             m.d.comb += [
                 serial_rgb_rp.addr.eq(tx_idx),
                 tx_byte.eq(
@@ -816,22 +792,24 @@ class BeamRaceTop(Elaboratable):
             with m.If(tx_sync_count != 0):
                 m.d.sync += tx_sync_count.eq(tx_sync_count - 1)
             with m.Else():
-                if self._serial_depth is not None:
-                    with m.If(tx_idx == (self._serial_depth - 1)):
+                if self.serial_depth is not None:
+                    with m.If(tx_idx == (self.serial_depth - 1)):
                         m.d.sync += tx_idx.eq(0)
                         with m.If(tx_plane == 2):
                             m.d.sync += [
                                 tx_plane.eq(0),
-                                tx_sync_count.eq(self._serial_sync_burst),
+                                tx_sync_count.eq(self.serial_sync_burst),
                             ]
                         with m.Else():
                             m.d.sync += tx_plane.eq(tx_plane + 1)
                     with m.Else():
                         m.d.sync += tx_idx.eq(tx_idx + 1)
 
+        # 0 -> -32768, 255 -> +32767 (for ASQ.width=16)
+        signed_midpt_offset = 1 << (ASQ.width - 1)
+
         m.d.comb += [
-            # 0 -> -32768, 255 -> +32767 (for ASQ.width=16)
-            tx_audio.eq((tx_byte * 257) - (1 << (ASQ.width - 1))),
+            tx_audio.eq((tx_byte * 257) - signed_midpt_offset),
             # Hold data channel at 0 during sync burst.
             tx_sample.eq(Mux(tx_sync_count != 0, 0, tx_audio)),
             # Sync stream on output channel 4 (index 3):
@@ -839,14 +817,14 @@ class BeamRaceTop(Elaboratable):
             tx_sync.eq(
                 Mux(
                     tx_sync_count != 0,
-                    (1 << (ASQ.width - 1)) - 1,
-                    -(1 << (ASQ.width - 1)),
+                    signed_midpt_offset - 1,
+                    -signed_midpt_offset,
                 )
             ),
             # wire pmod valid and ready
             pmod0.i_cal.valid.eq(pmod0.o_cal.valid),
             pmod0.o_cal.ready.eq(pmod0.i_cal.ready),
-            # nothing on out1/out2 passthrough
+            # nothing on out1/out2
             # out3 image data
             # out4 frame syncing
             pmod0.i_cal.payload[0].eq(0),

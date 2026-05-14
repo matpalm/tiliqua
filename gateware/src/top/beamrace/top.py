@@ -1,28 +1,3 @@
-# Copyright (c) 2024 Seb Holzapfel <me@sebholzapfel.com>
-#
-# SPDX-License-Identifier: CERN-OHL-S-2.0
-"""
-Simple video generation cores 'racing the beam', where the color of every pixel
-is calculated right before it is sent to the screen.
-
-Every 'pattern core' takes the signals in ``BeamRaceInputs`` (current pixel, current
-audio samples), and emits the signals in ``BeamRaceOutputs`` (output pixel color).
-
-Each 'pattern core' is wrapped by ``BeamRaceTop`` depending on which one is selected
-via the CLI, for example ``pdm beamracer build --core=stripes`` will build a
-``BeamRaceTop`` that contains the ``Stripes`` pattern core. The mapping is in ``CORES``
-below.
-
-Inside each 'pattern core', signals can be considered already synchronized into the 'dvi'
-domain - a ``DomainRenamer`` maps this to the ``sync`` domain in each pattern core. So,
-inside the pattern cores, you can assume everything is in the ``sync`` domain, which is
-at the pixel clock.
-
-A simulation testbench ``sim.cpp`` is provided, so you can simulate new cores by using
-``pdm beamrace sim --core=<my_core>``, which will emit bitmaps for the simulated frames.
-In the simulation testbench, sine and cosine waves are sent into the 'fake' audio inputs.
-"""
-
 import os
 import math
 import shutil
@@ -86,267 +61,8 @@ class BeamRaceOutputs(wiring.Signature):
             "b":     Out(8),
         })
 
-class Stripes(wiring.Component):
 
-    """
-    Beamracing pattern core.
-    Translated from 'Stripes' from https://vga-playground.com
-
-    Original attribution:
-     Copyright (c) 2024 Uri Shaked
-     SPDX-License-Identifier: Apache-2.0
-    """
-
-    i: In(BeamRaceInputs())
-    o: Out(BeamRaceOutputs())
-
-    bitstream_help = BitstreamHelp(
-        brief="Beamracing 'Stripes' pattern",
-        io_left=['', '', '', '', 'in0 (copy)', 'in1 (copy)', 'in2 (copy)', 'in3 (copy)'],
-        io_right=['', '', 'video (fixed)', '', '', '']
-    )
-
-    def elaborate(self, platform):
-
-        m = Module()
-
-        counter  = Signal(10)
-        moving_x = Signal(10)
-
-        l_vsync = Signal()
-        m.d.sync += l_vsync.eq(self.i.vsync)
-        with m.If(self.i.vsync & ~l_vsync):
-            m.d.sync += counter.eq(counter + 1)
-
-        m.d.comb += moving_x.eq(self.i.x + counter + self.i.audio_in0)
-
-        with m.If(self.i.de):
-            m.d.comb += [
-                self.o.r.eq(Cat(C(0, 6), self.i.y[2], moving_x[5])),
-                self.o.g.eq(Cat(C(0, 6), self.i.y[2], moving_x[6])),
-                self.o.b.eq(Cat(C(0, 6), self.i.y[5], moving_x[7])),
-            ]
-
-        return m
-
-class Balls(wiring.Component):
-
-    """
-    Beamracing pattern core.
-    Translated from 'Balls' from vga-playground.com
-
-    Edits: some added registers to make timing more FPGA friendly.
-
-    Original attribution:
-     Copyright (c) 2024 Renaldas Zioma
-     based on the VGA examples by Uri Shaked
-     SPDX-License-Identifier: Apache-2.0
-    """
-
-    i: In(BeamRaceInputs())
-    o: Out(BeamRaceOutputs())
-
-    bitstream_help = BitstreamHelp(
-        brief="Beamracing 'Balls' pattern",
-        io_left=['', '', '', '', 'in0 (copy)', 'in1 (copy)', 'in2 (copy)', 'in3 (copy)'],
-        io_right=['', '', 'video (fixed)', '', '', '']
-    )
-
-    def elaborate(self, platform):
-
-        m = Module()
-
-        # Time counter for animation
-        counter = Signal(20)
-
-        # Update animation counter on vsync
-        l_vsync = Signal()
-        m.d.sync += l_vsync.eq(self.i.vsync)
-        with m.If(self.i.vsync & ~l_vsync):
-            m.d.sync += counter.eq(counter + 1)
-
-        # Points for Worley noise
-        points_x = [Signal(signed(10)) for _ in range(4)]
-        points_y = [Signal(signed(10)) for _ in range(4)]
-
-        # Calculate point positions with animation
-        m.d.comb += [
-            points_x[0].eq(100 + counter),
-            points_y[0].eq(100 - counter),
-            points_x[1].eq(300 - (counter >> 1)),
-            points_y[1].eq(200 + (counter >> 1)),
-            points_x[2].eq(500 + (counter >> 1)),
-            points_y[2].eq(400 - (counter >> 4)),
-            points_x[3].eq(100 - (counter >> 3)),
-            points_y[3].eq(500 - (counter >> 2))
-        ]
-
-        distance1 = Signal(16)
-        distance2 = Signal(16)
-        distance3 = Signal(16)
-        distance4 = Signal(16)
-        min_dist = Signal(16)
-
-        # Calculate squared distances to each point
-        m.d.sync += [
-            distance1.eq((self.i.x - points_x[0]) * (self.i.x - points_x[0]) +
-                        (self.i.y - points_y[0]) * (self.i.y - points_y[0])),
-            distance2.eq((self.i.x - points_x[1]) * (self.i.x - points_x[1]) +
-                        (self.i.y - points_y[1]) * (self.i.y - points_y[1])),
-            distance3.eq((self.i.x - points_x[2]) * (self.i.x - points_x[2]) +
-                        (self.i.y - points_y[2]) * (self.i.y - points_y[2])),
-            distance4.eq((self.i.x - points_x[3]) * (self.i.x - points_x[3]) +
-                        (self.i.y - points_y[3]) * (self.i.y - points_y[3]))
-        ]
-
-        # Find minimum distance (simplified approach)
-        min1 = Signal(16)
-        min2 = Signal(16)
-
-        m.d.comb += [
-            min1.eq(Mux(distance1 < distance2, distance1, distance2)),
-            min2.eq(Mux(distance3 < distance4, distance3, distance4)),
-            min_dist.eq(Mux(min1 < min2, min1, min2))
-        ]
-
-        # Generate noise value from minimum distance
-        noise_value = Signal(8)
-        m.d.comb += noise_value.eq(~min_dist[8:15])  # Scale down to 8-bit and invert
-
-        # Set RGB output based on noise value when display is enabled
-        with m.If(self.i.de):
-            m.d.comb += [
-                self.o.r.eq(Cat(C(0, 6), noise_value[7], noise_value[2])),
-                self.o.g.eq(Cat(C(0, 6), noise_value[6], noise_value[3])),
-                self.o.b.eq(Cat(C(0, 6), noise_value[5], noise_value[4]))
-            ]
-
-        return m
-
-class Checkers(wiring.Component):
-
-    """
-    Beamracing pattern core.
-    Translated from 'Checkers' from vga-playground.com
-
-    Edits: 1 layer removed, some added registers for friendlier timing.
-
-    Original attribution:
-     Copyright (c) 2024 Renaldas Zioma
-     based on the VGA examples by Uri Shaked
-     SPDX-License-Identifier: Apache-2.0
-    """
-
-    i: In(BeamRaceInputs())
-    o: Out(BeamRaceOutputs())
-
-    bitstream_help = BitstreamHelp(
-        brief="Beamracing 'Checkers' pattern",
-        io_left=['position', 'color1', 'color2', 'color3', 'in0 (copy)', 'in1 (copy)', 'in2 (copy)', 'in3 (copy)'],
-        io_right=['', '', 'video (fixed)', '', '', '']
-    )
-
-    def elaborate(self, platform):
-
-        m = Module()
-
-        # Animation counter that increments on vsync
-        counter = Signal(10)
-        l_vsync = Signal()
-
-        # Detect rising edge of vsync
-        m.d.sync += l_vsync.eq(self.i.vsync)
-        with m.If(self.i.vsync & ~l_vsync):
-            m.d.sync += counter.eq(counter + (self.i.audio_in0 >> 10))
-
-        # Animated layer positions
-        layer_a_x = Signal(10)
-        layer_a_y = Signal(10)
-        layer_b_x = Signal(10)
-        layer_b_y = Signal(10)
-        layer_c_x = Signal(10)
-        layer_c_y = Signal(10)
-        layer_d_x = Signal(10)
-        layer_d_y = Signal(10)
-        layer_e_x = Signal(10)
-        layer_e_y = Signal(10)
-
-        # Calculate animated positions for each layer
-        m.d.sync += [
-            layer_a_x.eq(self.i.x + counter * 16),
-            layer_a_y.eq(self.i.y + counter * 2),
-            layer_b_x.eq(self.i.x + counter * 7),
-            layer_b_y.eq(self.i.y + counter + (counter >> 1)),
-            layer_c_x.eq(self.i.x + counter * 4),
-            layer_c_y.eq(self.i.y + (counter >> 1)),
-            layer_d_x.eq(self.i.x + counter * 2),
-            layer_d_y.eq(self.i.y + (counter >> 2)),
-        ]
-
-        # Layer patterns with transparency using dithering
-        layer_a = Signal()
-        layer_b = Signal()
-        layer_c = Signal()
-        layer_d = Signal()
-
-        m.d.sync += [
-            layer_a.eq((layer_a_x[8] ^ layer_a_y[8]) & (self.i.y[1] ^ self.i.x[0])),
-            layer_b.eq((layer_b_x[7] ^ layer_b_y[7]) & (~self.i.y[0] ^ self.i.x[1])),
-            layer_c.eq(layer_c_x[6] ^ layer_c_y[6]),
-            layer_d.eq(layer_d_x[5] ^ layer_d_y[5]),
-        ]
-
-        # Define layer colors
-        # For simplicity, use a constant color for color_a
-        # This could be made configurable similar to ui_in in the original
-        color_a = Signal(6)
-        color_b = Signal(6)
-        color_c = Signal(6)
-        color_de = Signal(6)
-
-        m.d.sync += [
-            color_a.eq(0x3F + (self.i.audio_in1>>8)),  # Example color 0x3F = 0b111111
-            color_b.eq(color_a ^ 0b001010 ^ (self.i.audio_in2>>8)),
-            color_c.eq(color_b & 0b101010 + (self.i.audio_in3>>8)),
-            color_de.eq(color_c >> 1)
-        ]
-
-        # Output color selection based on layers
-        with m.If(layer_a):
-            m.d.sync += [
-                self.o.r.eq(Cat(C(0, 6), color_a[1], color_a[0])),
-                self.o.g.eq(Cat(C(0, 6), color_a[3], color_a[2])),
-                self.o.b.eq(Cat(C(0, 6), color_a[5], color_a[4]))
-            ]
-        with m.Elif(layer_b):
-            m.d.sync += [
-                self.o.r.eq(Cat(C(0, 6), color_b[1], color_b[0])),
-                self.o.g.eq((self.i.audio_in1>>8)),
-                self.o.b.eq(Cat(C(0, 6), color_b[5], color_b[4]))
-            ]
-        with m.Elif(layer_c):
-            m.d.sync += [
-                self.o.r.eq(Cat(C(0, 6), color_c[1], color_c[0])),
-                self.o.g.eq(Cat(C(0, 6), color_c[3], color_c[2])),
-                self.o.b.eq(Cat(C(0, 6), color_c[5], color_c[4]))
-            ]
-        with m.Elif(layer_d):
-            m.d.sync += [
-                self.o.r.eq(Cat(C(0, 6), color_de[1], color_de[0])),
-                self.o.g.eq(Cat(C(0, 6), color_de[3], color_de[2])),
-                self.o.b.eq(Cat(C(0, 6), color_de[5], color_de[4]))
-            ]
-        with m.Else():
-            m.d.sync += [
-                self.o.r.eq(0),
-                self.o.g.eq(0),
-                self.o.b.eq(0)
-            ]
-
-        return m
-
-
-class EuroVidRack(wiring.Component):
+class EuroVidRackCore(wiring.Component):
 
     i: In(BeamRaceInputs())
     o: Out(BeamRaceOutputs())
@@ -405,7 +121,7 @@ class EuroVidRack(wiring.Component):
             init=[0 for _ in range(self.IMAGE_W * self.IMAGE_H)],
         )
 
-        # Exported serialized image stream for BeamRaceTop audio TX.
+        # Exported serialized image stream for top-level audio TX.
         self.serial_tx_byte = Signal(8)
         self.serial_tx_sync_active = Signal()
 
@@ -538,7 +254,7 @@ class EuroVidRack(wiring.Component):
             ),
             # in1 controls display of original vs via feedback
             show_original.eq(audio_sync[1] > 0),
-            # Inverse of BeamRaceTop's image-byte serialization on channel 3:
+            # Inverse of top-level image-byte serialization on channel 3:
             # out = (pixel * 257) - 32768  =>  pixel = ((in + 32768) >> 8).
             in2_unsigned.eq(rx_data + (1 << (ASQ.width - 1))),
             feedback_px.eq(in2_unsigned[8:16]),
@@ -700,16 +416,16 @@ class EuroVidRack(wiring.Component):
 
         return m
 
-class BeamRaceTop(Elaboratable):
 
+class EuroVidRack(Elaboratable):
     """
-    Wrapper structure around beamracing cores.
+    Top-level EuroVidRack design.
 
-    Provides the clock, DVI timing generation and PHY, and interface to the audio IOs
-    (synchronized to the video domain), as well as 'hold to enter bootloader' logic.
+    Provides the clocking, DVI timing/PHY, and audio interface wiring around
+    the EuroVidRackCore beamracing logic.
     """
 
-    def __init__(self, clock_settings, beamrace_core: wiring.Component):
+    def __init__(self, clock_settings):
 
         # This core only works with static modelines
         assert clock_settings.modeline is not None
@@ -717,12 +433,9 @@ class BeamRaceTop(Elaboratable):
         self.clock_settings = clock_settings
         self.pmod0 = eurorack_pmod.EurorackPmod(self.clock_settings.audio_clock)
         self.dvi_tgen = dvi.DVITimingGen()
-        self._beamrace_core_cls = beamrace_core
 
-        self.serial_sync_burst = 8
-
-        # Instantiate the provided beamracing core, for us to wrap it
-        self.core = DomainRenamer("dvi")(beamrace_core())
+        # Instantiate the EuroVidRack core logic to wrap at top-level.
+        self.core = DomainRenamer("dvi")(EuroVidRackCore())
 
         # Forward bitstream_help from the core if it exists
         if hasattr(self.core, "bitstream_help"):
@@ -756,57 +469,19 @@ class BeamRaceTop(Elaboratable):
         # Beamracer core itself
         m.submodules.core = core = self.core
 
-        # Audio routing: channel 3 carries serialized image bytes, channel 4 carries sync framing.
+        # Audio routing: channel 3 carries serialized image samples, channel 4 carries sync framing.
         sample_stb = Signal()
         audio_tick_toggle = Signal()
-        tx_byte = Signal(8)
-        # tx_y = Signal(unsigned(8))
-        # tx_u = Signal(unsigned(8))
-        # tx_v = Signal(unsigned(8))
-        # tx_y_sum = Signal(unsigned(18))
-        # tx_u_sum = Signal(signed(18))
-        # tx_v_sum = Signal(signed(18))
-        # tx_u_tmp = Signal(signed(20))
-        # tx_v_tmp = Signal(signed(20))
+        tx_sync_active = Signal()
         tx_audio = Signal(signed(ASQ.width))
         tx_sample = Signal(signed(ASQ.width))
         tx_sync = Signal(signed(ASQ.width))
-        tx_sync_count = Signal(
-            range(self.serial_sync_burst + 1), init=self.serial_sync_burst
-        )
-        tx_sync_active = Signal()
-
-        has_core_serializer = hasattr(core, "serial_tx_byte") and hasattr(
-            core, "serial_tx_sync_active"
-        )
-        if has_core_serializer:
-            m.d.comb += [
-                tx_byte.eq(core.serial_tx_byte),
-                tx_sync_active.eq(core.serial_tx_sync_active),
-            ]
-        else:
-            m.d.comb += [
-                tx_byte.eq(core.o.r),
-                tx_sync_active.eq(tx_sync_count != 0),
-            ]
-
-        m.d.comb += sample_stb.eq(pmod0.o_cal.valid & pmod0.i_cal.ready)
-
-        with m.If(sample_stb):
-            m.d.sync += audio_tick_toggle.eq(~audio_tick_toggle)
-            if not has_core_serializer:
-                with m.If(tx_sync_count != 0):
-                    m.d.sync += tx_sync_count.eq(tx_sync_count - 1)
-
-        # 0 -> -32768, 255 -> +32767 (for ASQ.width=16)
         signed_midpt_offset = 1 << (ASQ.width - 1)
 
         m.d.comb += [
-            tx_audio.eq((tx_byte * 257) - signed_midpt_offset),
-            # Hold data channel at 0 during sync burst.
+            tx_sync_active.eq(core.serial_tx_sync_active),
+            tx_audio.eq((core.serial_tx_byte * 257) - signed_midpt_offset),
             tx_sample.eq(Mux(tx_sync_active, 0, tx_audio)),
-            # Sync stream on output channel 4 (index 3):
-            # +FS for sync burst, -FS otherwise.
             tx_sync.eq(
                 Mux(
                     tx_sync_active,
@@ -814,6 +489,14 @@ class BeamRaceTop(Elaboratable):
                     -signed_midpt_offset,
                 )
             ),
+        ]
+
+        m.d.comb += sample_stb.eq(pmod0.o_cal.valid & pmod0.i_cal.ready)
+
+        with m.If(sample_stb):
+            m.d.sync += audio_tick_toggle.eq(~audio_tick_toggle)
+
+        m.d.comb += [
             # wire pmod valid and ready
             pmod0.i_cal.valid.eq(pmod0.o_cal.valid),
             pmod0.o_cal.ready.eq(pmod0.i_cal.ready),
@@ -859,16 +542,9 @@ class BeamRaceTop(Elaboratable):
 
         return m
 
-# Different beamrace cores that can be selected using e.g. `pdm beamracer build --core=stripes`.
-CORES = {
-    "stripes": Stripes,
-    "balls": Balls,
-    "checkers": Checkers,
-    "euro_vid_rack": EuroVidRack,
-}
 
 def simulation_ports(fragment):
-    # Ports required by `sim.cpp` for end-to-end simulation of these cores.
+    # Ports required by `sim.cpp` for end-to-end simulation.
     return {
         "clk_sync":       (ClockSignal("sync"),              None),
         "rst_sync":       (ResetSignal("sync"),              None),
@@ -888,30 +564,10 @@ def simulation_ports(fragment):
         "dvi_b":          (fragment.core.o.b,                None),
     }
 
-def argparse_callback(parser):
-    parser.add_argument('--core', type=str, default="checkers",
-                        help=f"One of {list(CORES)}")
-
-def argparse_fragment(args):
-    # Additional arguments to be provided to BeamRaceTop
-    if args.core not in CORES:
-        print(f"provided '--core {args.core}' is not one of {list(CORES)}")
-        import sys
-        sys.exit(-1)
-
-    cls_name = CORES[args.core]
-    if args.name == 'BEAMRACE':
-        args.name = 'BR-' + args.core.upper().replace('_','-')
-    return {
-        "beamrace_core": cls_name,
-    }
-
 if __name__ == "__main__":
     this_path = os.path.dirname(os.path.realpath(__file__))
     top_level_cli(
-        BeamRaceTop,
+        EuroVidRack,
         sim_ports=simulation_ports,
         sim_harness="../../src/top/beamrace/sim.cpp",
-        argparse_callback=argparse_callback,
-        argparse_fragment=argparse_fragment,
     )

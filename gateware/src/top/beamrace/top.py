@@ -137,6 +137,11 @@ class EuroVidRackCore(wiring.Component):
     def elaborate(self, platform):
 
         m = Module()
+        m.domains.spi = ClockDomain("spi", async_reset=True)
+        m.d.comb += [
+            ClockSignal("spi").eq(self.spi_sck),
+            ResetSignal("spi").eq(self.spi_cs),
+        ]
         # use_yuv = self.FEEDBACK_COLOUR_SPACE == "YUV"
 
         # Keep synchronized copies of audio inputs in the local sync domain.
@@ -225,10 +230,10 @@ class EuroVidRackCore(wiring.Component):
             domain="sync"
         )
         m.submodules.spi_incoming_wp = spi_incoming_wp = (
-            self.spi_incoming_img.write_port(domain="sync")
+            self.spi_incoming_img.write_port(domain="spi")
         )
         m.submodules.original_wp = original_wp = self.original_img.write_port(
-            domain="sync"
+            domain="spi"
         )
 
         # Feedback image uses independent read ports for display and read-modify-write.
@@ -243,8 +248,6 @@ class EuroVidRackCore(wiring.Component):
         )
 
         # SPI image ingest state.
-        spi_prev_cs = Signal(init=1)
-        spi_prev_sck = Signal()
         spi_bit_count = Signal(range(8))
         spi_rx_shift = Signal(8)
         spi_tx_shift = Signal(8)
@@ -365,133 +368,119 @@ class EuroVidRackCore(wiring.Component):
             self.serial_tx_sync_active.eq(tx_sync_count != 0),
         ]
 
-        m.d.sync += spi_wr_en.eq(0)
+        m.d.spi += spi_wr_en.eq(0)
 
-        with m.If(self.spi_cs):
-            m.d.sync += [
-                spi_stage.eq(0),
-                spi_bit_count.eq(0),
-                spi_tx_active.eq(0),
-                spi_tx_armed.eq(0),
-                pkt_bytes_left.eq(0),
-                payload_byte_pos.eq(0),
-            ]
+        next_byte = Cat(self.spi_mosi, spi_rx_shift[:-1])
+        m.d.spi += spi_rx_shift.eq(next_byte)
+        with m.If(spi_bit_count == 7):
+            m.d.spi += spi_bit_count.eq(0)
+            with m.Switch(spi_stage):
+                with m.Case(0):
+                    with m.If(next_byte == 0xA5):
+                        m.d.spi += spi_stage.eq(1)
+                with m.Case(1):
+                    with m.If(next_byte == 0x5A):
+                        m.d.spi += spi_stage.eq(2)
+                    with m.Else():
+                        m.d.spi += spi_stage.eq(0)
+                with m.Case(2):
+                    m.d.spi += [
+                        pkt_frame_id.eq(next_byte),
+                        crc_calc.eq(crc16_next(Const(0xFFFF, 16), next_byte)),
+                        spi_stage.eq(3),
+                    ]
+                with m.Case(3):
+                    m.d.spi += [
+                        pkt_off_hi.eq(next_byte),
+                        crc_calc.eq(crc16_next(crc_calc, next_byte)),
+                        spi_stage.eq(4),
+                    ]
+                with m.Case(4):
+                    pix_off = Cat(next_byte, pkt_off_hi)
+                    m.d.spi += [
+                        pkt_pix_off.eq(pix_off),
+                        crc_calc.eq(crc16_next(crc_calc, next_byte)),
+                        spi_stage.eq(5),
+                    ]
+                with m.Case(5):
+                    m.d.spi += [
+                        pkt_len_hi.eq(next_byte),
+                        crc_calc.eq(crc16_next(crc_calc, next_byte)),
+                        spi_stage.eq(6),
+                    ]
+                with m.Case(6):
+                    pix_len = Cat(next_byte, pkt_len_hi)
+                    m.d.spi += crc_calc.eq(crc16_next(crc_calc, next_byte))
+                    with m.If(
+                        (pix_len > 0) & ((pkt_pix_off + pix_len) <= self.N_PIXELS)
+                    ):
+                        m.d.spi += [
+                            pkt_pix_len.eq(pix_len),
+                            pkt_bytes_left.eq(pix_len * 3),
+                            pkt_pixel_addr.eq(pkt_pix_off),
+                            payload_byte_pos.eq(0),
+                            spi_stage.eq(7),
+                        ]
+                    with m.Else():
+                        m.d.spi += [
+                            spi_tx_shift.eq(0xE1),
+                            spi_tx_active.eq(1),
+                            spi_tx_armed.eq(1),
+                            spi_stage.eq(0),
+                        ]
+                with m.Case(7):
+                    m.d.spi += [
+                        crc_calc.eq(crc16_next(crc_calc, next_byte)),
+                        pkt_bytes_left.eq(pkt_bytes_left - 1),
+                    ]
+                    with m.If(payload_byte_pos == 0):
+                        m.d.spi += [
+                            payload_r.eq(next_byte),
+                            payload_byte_pos.eq(1),
+                        ]
+                    with m.Elif(payload_byte_pos == 1):
+                        m.d.spi += [
+                            payload_g.eq(next_byte),
+                            payload_byte_pos.eq(2),
+                        ]
+                    with m.Else():
+                        m.d.spi += [
+                            payload_byte_pos.eq(0),
+                            spi_wr_en.eq(1),
+                            spi_wr_addr.eq(pkt_pixel_addr),
+                            spi_wr_data.eq(Cat(next_byte, payload_g, payload_r)),
+                            pkt_pixel_addr.eq(pkt_pixel_addr + 1),
+                        ]
+                    with m.If(pkt_bytes_left == 1):
+                        m.d.spi += spi_stage.eq(8)
+                with m.Case(8):
+                    m.d.spi += [
+                        crc_hi.eq(next_byte),
+                        spi_stage.eq(9),
+                    ]
+                with m.Case(9):
+                    with m.If(Cat(next_byte, crc_hi) == crc_calc):
+                        m.d.spi += [
+                            spi_tx_shift.eq(0x11),
+                            spi_tx_active.eq(1),
+                            spi_tx_armed.eq(1),
+                            spi_stage.eq(0),
+                        ]
+                    with m.Else():
+                        m.d.spi += [
+                            spi_tx_shift.eq(0xE2),
+                            spi_tx_active.eq(1),
+                            spi_tx_armed.eq(1),
+                            spi_stage.eq(0),
+                        ]
         with m.Else():
-            with m.If((~spi_prev_sck) & self.spi_sck):
-                next_byte = Cat(self.spi_mosi, spi_rx_shift[:-1])
-                m.d.sync += spi_rx_shift.eq(next_byte)
-                with m.If(spi_bit_count == 7):
-                    m.d.sync += spi_bit_count.eq(0)
-                    with m.Switch(spi_stage):
-                        with m.Case(0):
-                            with m.If(next_byte == 0xA5):
-                                m.d.sync += spi_stage.eq(1)
-                        with m.Case(1):
-                            with m.If(next_byte == 0x5A):
-                                m.d.sync += spi_stage.eq(2)
-                            with m.Else():
-                                m.d.sync += spi_stage.eq(0)
-                        with m.Case(2):
-                            m.d.sync += [
-                                pkt_frame_id.eq(next_byte),
-                                crc_calc.eq(crc16_next(0xFFFF, next_byte)),
-                                spi_stage.eq(3),
-                            ]
-                        with m.Case(3):
-                            m.d.sync += [
-                                pkt_off_hi.eq(next_byte),
-                                crc_calc.eq(crc16_next(crc_calc, next_byte)),
-                                spi_stage.eq(4),
-                            ]
-                        with m.Case(4):
-                            pix_off = Cat(next_byte, pkt_off_hi)
-                            m.d.sync += [
-                                pkt_pix_off.eq(pix_off),
-                                crc_calc.eq(crc16_next(crc_calc, next_byte)),
-                                spi_stage.eq(5),
-                            ]
-                        with m.Case(5):
-                            m.d.sync += [
-                                pkt_len_hi.eq(next_byte),
-                                crc_calc.eq(crc16_next(crc_calc, next_byte)),
-                                spi_stage.eq(6),
-                            ]
-                        with m.Case(6):
-                            pix_len = Cat(next_byte, pkt_len_hi)
-                            m.d.sync += crc_calc.eq(crc16_next(crc_calc, next_byte))
-                            with m.If(
-                                (pix_len > 0)
-                                & ((pkt_pix_off + pix_len) <= self.N_PIXELS)
-                            ):
-                                m.d.sync += [
-                                    pkt_pix_len.eq(pix_len),
-                                    pkt_bytes_left.eq(pix_len * 3),
-                                    pkt_pixel_addr.eq(pkt_pix_off),
-                                    payload_byte_pos.eq(0),
-                                    spi_stage.eq(7),
-                                ]
-                            with m.Else():
-                                m.d.sync += [
-                                    spi_tx_shift.eq(0xE1),
-                                    spi_tx_active.eq(1),
-                                    spi_tx_armed.eq(1),
-                                    spi_stage.eq(0),
-                                ]
-                        with m.Case(7):
-                            m.d.sync += [
-                                crc_calc.eq(crc16_next(crc_calc, next_byte)),
-                                pkt_bytes_left.eq(pkt_bytes_left - 1),
-                            ]
-                            with m.If(payload_byte_pos == 0):
-                                m.d.sync += [
-                                    payload_r.eq(next_byte),
-                                    payload_byte_pos.eq(1),
-                                ]
-                            with m.Elif(payload_byte_pos == 1):
-                                m.d.sync += [
-                                    payload_g.eq(next_byte),
-                                    payload_byte_pos.eq(2),
-                                ]
-                            with m.Else():
-                                m.d.sync += [
-                                    payload_byte_pos.eq(0),
-                                    spi_wr_en.eq(1),
-                                    spi_wr_addr.eq(pkt_pixel_addr),
-                                    spi_wr_data.eq(
-                                        Cat(next_byte, payload_g, payload_r)
-                                    ),
-                                    pkt_pixel_addr.eq(pkt_pixel_addr + 1),
-                                ]
-                            with m.If(pkt_bytes_left == 1):
-                                m.d.sync += spi_stage.eq(8)
-                        with m.Case(8):
-                            m.d.sync += [
-                                crc_hi.eq(next_byte),
-                                spi_stage.eq(9),
-                            ]
-                        with m.Case(9):
-                            with m.If(Cat(next_byte, crc_hi) == crc_calc):
-                                m.d.sync += [
-                                    spi_tx_shift.eq(0x11),
-                                    spi_tx_active.eq(1),
-                                    spi_tx_armed.eq(1),
-                                    spi_stage.eq(0),
-                                ]
-                            with m.Else():
-                                m.d.sync += [
-                                    spi_tx_shift.eq(0xE2),
-                                    spi_tx_active.eq(1),
-                                    spi_tx_armed.eq(1),
-                                    spi_stage.eq(0),
-                                ]
-                with m.Else():
-                    m.d.sync += spi_bit_count.eq(spi_bit_count + 1)
+            m.d.spi += spi_bit_count.eq(spi_bit_count + 1)
 
-            with m.If(spi_prev_sck & (~self.spi_sck) & spi_tx_active):
-                with m.If(spi_tx_armed):
-                    m.d.sync += spi_tx_armed.eq(0)
-                with m.Else():
-                    m.d.sync += spi_tx_shift.eq((spi_tx_shift << 1)[:8])
+        with m.If(spi_tx_active):
+            with m.If(spi_tx_armed):
+                m.d.spi += spi_tx_armed.eq(0)
+            with m.Else():
+                m.d.spi += spi_tx_shift.eq((spi_tx_shift << 1)[:8])
 
         # if use_yuv:
         #     m.d.comb += [
@@ -515,8 +504,6 @@ class EuroVidRackCore(wiring.Component):
             audio_tick_d.eq(self.i.audio_tick),
             rx_data_d1.eq(audio_sync[2]),
             rx_data_d2.eq(rx_data_d1),
-            spi_prev_cs.eq(self.spi_cs),
-            spi_prev_sck.eq(self.spi_sck),
         ]
 
         # choose receive delay based on in0: 0, 1, or 2 samples.
@@ -677,18 +664,10 @@ class EuroVidRack(Elaboratable):
         m.submodules.core = core = self.core
 
         if sim.is_hw(platform):
-            spi_cs_dvi = Signal()
-            spi_sck_dvi = Signal()
-            spi_mosi_dvi = Signal()
-            m.submodules += [
-                FFSynchronizer(spi.cs.i, spi_cs_dvi, o_domain="dvi"),
-                FFSynchronizer(spi.sck.i, spi_sck_dvi, o_domain="dvi"),
-                FFSynchronizer(spi.mosi.i, spi_mosi_dvi, o_domain="dvi"),
-            ]
             m.d.comb += [
-                core.spi_cs.eq(spi_cs_dvi),
-                core.spi_sck.eq(spi_sck_dvi),
-                core.spi_mosi.eq(spi_mosi_dvi),
+                core.spi_cs.eq(spi.cs.i),
+                core.spi_sck.eq(spi.sck.i),
+                core.spi_mosi.eq(spi.mosi.i),
                 spi.miso.o.eq(core.spi_miso),
             ]
         else:

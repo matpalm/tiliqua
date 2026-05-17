@@ -17,17 +17,22 @@ from picamera2 import Picamera2
 from PIL import Image
 import spidev
 
-IMAGE_W = 128
-IMAGE_H = 75
+# resolution to capture on the camera
 CAPTURE_W = 320
 CAPTURE_H = 240
+# resolution to resize to for sending
+IMAGE_W = 128
+IMAGE_H = 75
 N_PIXELS = IMAGE_W * IMAGE_H
+# start of frame bytes for syncing
 SOF0 = 0xA5
 SOF1 = 0x5A
+# possible responses from tiliqua; ack or error by length or crc
 ACK = 0x11
 ERR_LEN = 0xE1
 ERR_CRC = 0xE2
 SPI_MODE = 0
+# extra bytes appended to packets
 STATUS_DUMMY_BYTES = 3
 RESAMPLE_BILINEAR = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
 

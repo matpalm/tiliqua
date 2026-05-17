@@ -258,6 +258,7 @@ class EuroVidRackCore(wiring.Component):
         spi_tx_armed = Signal()
 
         spi_stage = Signal(range(10))
+        # crc for frame id from server. overkill?
         pkt_frame_id = Signal(8)
         pkt_off_hi = Signal(8)
         pkt_len_hi = Signal(8)
@@ -286,6 +287,8 @@ class EuroVidRackCore(wiring.Component):
         ]
 
         def crc16_next(crc, byte):
+            # TODO: is there a std lib for this? needed to use the c lib
+            # on the python size for speed...
             val = Value.cast(crc)
             byte = Value.cast(byte)
             for i in range(8):
@@ -391,6 +394,8 @@ class EuroVidRackCore(wiring.Component):
         with m.If(spi_bit_count == 7):
             m.d.spi += spi_bit_count.eq(0)
             with m.Switch(spi_stage):
+                # sync to start of frame markers; 0xA5 and 0x5A
+                # ( serious flashbacks to EFT processing days :/ )
                 with m.Case(0):
                     with m.If(next_byte == 0xA5):
                         m.d.spi += spi_stage.eq(1)
@@ -400,18 +405,24 @@ class EuroVidRackCore(wiring.Component):
                     with m.Else():
                         m.d.spi += spi_stage.eq(0)
                 with m.Case(2):
+                    # read frame_id
+                    # ( first byte of CRC )
                     m.d.spi += [
                         pkt_frame_id.eq(next_byte),
                         crc_calc.eq(crc16_next(Const(0xFFFF, 16), next_byte)),
                         spi_stage.eq(3),
                     ]
                 with m.Case(3):
+                    # read pixel offset ( high byte )
+                    # ( next byte of CRC )
                     m.d.spi += [
                         pkt_off_hi.eq(next_byte),
                         crc_calc.eq(crc16_next(crc_calc, next_byte)),
                         spi_stage.eq(4),
                     ]
                 with m.Case(4):
+                    # read pixel offset ( low byte ) => pixel offset
+                    # ( next byte of CRC )
                     pix_off = Cat(next_byte, pkt_off_hi)
                     m.d.spi += [
                         pkt_pix_off.eq(pix_off),
@@ -419,17 +430,22 @@ class EuroVidRackCore(wiring.Component):
                         spi_stage.eq(5),
                     ]
                 with m.Case(5):
+                    # read pixel length ( high byte )
+                    # ( next byte of CRC )
                     m.d.spi += [
                         pkt_len_hi.eq(next_byte),
                         crc_calc.eq(crc16_next(crc_calc, next_byte)),
                         spi_stage.eq(6),
                     ]
                 with m.Case(6):
+                    # read pixel length ( low byte ) => pixel length
                     pix_len = Cat(next_byte, pkt_len_hi)
                     m.d.spi += crc_calc.eq(crc16_next(crc_calc, next_byte))
+                    # validate payload range
                     with m.If(
                         (pix_len > 0) & ((pkt_pix_off + pix_len) <= self.N_PIXELS)
                     ):
+                        # looks ok, update payload coutners and addr
                         m.d.spi += [
                             pkt_pix_len.eq(pix_len),
                             pkt_bytes_left.eq(pix_len * 3),
@@ -438,6 +454,7 @@ class EuroVidRackCore(wiring.Component):
                             spi_stage.eq(7),
                         ]
                     with m.Else():
+                        # looks bad, set error status
                         m.d.spi += [
                             spi_tx_shift.eq(0xE1),
                             spi_tx_active.eq(1),
@@ -445,10 +462,12 @@ class EuroVidRackCore(wiring.Component):
                             spi_stage.eq(0),
                         ]
                 with m.Case(7):
+                    # decrease bytes left & update CRC
                     m.d.spi += [
                         crc_calc.eq(crc16_next(crc_calc, next_byte)),
                         pkt_bytes_left.eq(pkt_bytes_left - 1),
                     ]
+                    # read red, green, blue pixel
                     with m.If(payload_byte_pos == 0):
                         m.d.spi += [
                             payload_r.eq(next_byte),
@@ -470,12 +489,15 @@ class EuroVidRackCore(wiring.Component):
                     with m.If(pkt_bytes_left == 1):
                         m.d.spi += spi_stage.eq(8)
                 with m.Case(8):
+                    # update crc
                     m.d.spi += [
                         crc_hi.eq(next_byte),
                         spi_stage.eq(9),
                     ]
                 with m.Case(9):
+                    # check crc
                     with m.If(Cat(next_byte, crc_hi) == crc_calc):
+                        # looks good => ACK
                         m.d.spi += [
                             spi_tx_shift.eq(0x11),
                             spi_tx_active.eq(1),
@@ -483,6 +505,7 @@ class EuroVidRackCore(wiring.Component):
                             spi_stage.eq(0),
                         ]
                     with m.Else():
+                        # looks bad => ERR
                         m.d.spi += [
                             spi_tx_shift.eq(0xE2),
                             spi_tx_active.eq(1),

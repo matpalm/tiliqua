@@ -164,10 +164,13 @@ class EuroVidRackCore(wiring.Component):
         in_range = Signal()
         in_range_d = Signal()
 
-        # whether we are showing the fixed original or the feedback
-        # ( show original vs feedback imaged depending on in0 >= 0 )
-        show_original = Signal()
-        show_original_d = Signal()
+        # Blend control derived from in1: 0 -> feedback, 255 -> original.
+        blend_alpha = Signal(8)
+        blend_alpha_d = Signal(8)
+        blend_inv_alpha_d = Signal(8)
+        blend_r_mix = Signal(17)
+        blend_g_mix = Signal(17)
+        blend_b_mix = Signal(17)
 
         # which of the delayed signals to use;
         #  0 -> no delay,
@@ -315,8 +318,8 @@ class EuroVidRackCore(wiring.Component):
                     Mux(rx_delay_sel == 1, rx_data_d1, rx_data_d2),
                 )
             ),
-            # in1 controls display of original vs via feedback
-            show_original.eq(audio_sync[1] > 0),
+            # Map signed in1 from [-32768, 32767] to [0, 255] blend alpha.
+            blend_alpha.eq((audio_sync[1] + (1 << (ASQ.width - 1)))[8:16]),
             # Inverse of top-level image-byte serialization on channel 3:
             # out = (pixel * 257) - 32768  =>  pixel = ((in + 32768) >> 8).
             in2_unsigned.eq(rx_data + (1 << (ASQ.width - 1))),
@@ -366,6 +369,19 @@ class EuroVidRackCore(wiring.Component):
                 )
             ),
             self.serial_tx_sync_active.eq(tx_sync_count != 0),
+            blend_inv_alpha_d.eq(0xFF - blend_alpha_d),
+            blend_r_mix.eq(
+                (original_rp.data[16:24] * blend_alpha_d)
+                + (feedback_display_rp.data[16:24] * blend_inv_alpha_d)
+            ),
+            blend_g_mix.eq(
+                (original_rp.data[8:16] * blend_alpha_d)
+                + (feedback_display_rp.data[8:16] * blend_inv_alpha_d)
+            ),
+            blend_b_mix.eq(
+                (original_rp.data[0:8] * blend_alpha_d)
+                + (feedback_display_rp.data[0:8] * blend_inv_alpha_d)
+            ),
         ]
 
         m.d.spi += spi_wr_en.eq(0)
@@ -500,7 +516,7 @@ class EuroVidRackCore(wiring.Component):
 
         m.d.sync += [
             in_range_d.eq(in_range),
-            show_original_d.eq(show_original),
+            blend_alpha_d.eq(blend_alpha),
             audio_tick_d.eq(self.i.audio_tick),
             rx_data_d1.eq(audio_sync[2]),
             rx_data_d2.eq(rx_data_d1),
@@ -562,27 +578,9 @@ class EuroVidRackCore(wiring.Component):
             #     ]
             # else:
             m.d.sync += [
-                self.o.r.eq(
-                    Mux(
-                        show_original_d,
-                        original_rp.data[16:24],
-                        feedback_display_rp.data[16:24],
-                    )
-                ),
-                self.o.g.eq(
-                    Mux(
-                        show_original_d,
-                        original_rp.data[8:16],
-                        feedback_display_rp.data[8:16],
-                    )
-                ),
-                self.o.b.eq(
-                    Mux(
-                        show_original_d,
-                        original_rp.data[0:8],
-                        feedback_display_rp.data[0:8],
-                    )
-                ),
+                self.o.r.eq((blend_r_mix + 0x80) >> 8),
+                self.o.g.eq((blend_g_mix + 0x80) >> 8),
+                self.o.b.eq((blend_b_mix + 0x80) >> 8),
             ]
         with m.Else():
             m.d.sync += [

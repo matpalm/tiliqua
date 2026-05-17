@@ -5,7 +5,7 @@ Wiring (matches spi_test): EX1 PMOD CS=1, SCK=7, MOSI=9, MISO=8.
 Protocol:
 - Packet: SOF(0xA5,0x5A), frame_id, pix_off_hi, pix_off_lo, pix_len_hi, pix_len_lo,
   payload (RGB bytes, 3*pix_len), crc_hi, crc_lo.
-- Host appends dummy bytes to clock out status.
+- Host appends 3 dummy bytes to clock out status.
 - Status: 0x11 ACK, 0xE1 length/range error, 0xE2 CRC error.
 """
 
@@ -27,22 +27,13 @@ SOF1 = 0x5A
 ACK = 0x11
 ERR_LEN = 0xE1
 ERR_CRC = 0xE2
+SPI_MODE = 0
+STATUS_DUMMY_BYTES = 3
 RESAMPLE_BILINEAR = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
 
 
-def _shift_variants(byte, max_shift=1):
-    # Only accept small bit-slip signatures; broad shifts create false positives
-    # on idle lines (for example 0x00) and can mask real link failures.
-    vals = {byte}
-    for n in range(1, max_shift + 1):
-        vals.add((byte << n) & 0xFF)
-        vals.add((byte >> n) & 0xFF)
-    vals.discard(0x00)
-    vals.discard(0xFF)
-    return vals
-
-
-ACK_SHIFTED = _shift_variants(ACK)
+# Deterministic ACK variants observed with +/-1 bit alignment.
+ACK_SHIFTED = {0x11, 0x22, 0x08}
 
 
 def decode_status(tail):
@@ -103,14 +94,13 @@ def upload_frame(
     frame_id,
     chunk_pixels,
     retries,
-    status_dummy_bytes,
     retry_backoff_s,
 ):
     if len(rgb_bytes) != N_PIXELS * 3:
         raise ValueError(f"Expected {N_PIXELS*3} bytes, got {len(rgb_bytes)}")
 
     rgb_view = memoryview(rgb_bytes)
-    status_dummy = [0x00] * status_dummy_bytes
+    status_dummy = [0x00] * STATUS_DUMMY_BYTES
     n_chunks = (N_PIXELS + chunk_pixels - 1) // chunk_pixels
 
     for chunk_i in range(n_chunks):
@@ -123,7 +113,7 @@ def upload_frame(
         ok = False
         for attempt in range(1, retries + 1):
             rx = spi.xfer2(tx)
-            tail = rx[-status_dummy_bytes:]
+            tail = rx[-STATUS_DUMMY_BYTES:]
             status = decode_status(tail)
             if status == ACK:
                 ok = True
@@ -144,20 +134,18 @@ def upload_frame(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hz", type=int, default=1_000_000)
-    parser.add_argument("--spi-mode", type=int, default=0, choices=[0, 1, 2, 3])
     parser.add_argument("--chunk-pixels", type=int, default=128)
     parser.add_argument("--retries", type=int, default=4)
-    parser.add_argument("--status-dummy-bytes", type=int, default=3)
     parser.add_argument("--retry-backoff-ms", type=float, default=0.5)
     args = parser.parse_args()
 
     spi = spidev.SpiDev()
     spi.open(0, 0)
     spi.max_speed_hz = args.hz
-    spi.mode = args.spi_mode
+    spi.mode = SPI_MODE
     print(
-        f"SPI config: mode={spi.mode} hz={spi.max_speed_hz} "
-        f"dummy={args.status_dummy_bytes} chunk_pixels={args.chunk_pixels}"
+        f"SPI config: mode={SPI_MODE} hz={spi.max_speed_hz} "
+        f"dummy={STATUS_DUMMY_BYTES} chunk_pixels={args.chunk_pixels}"
     )
 
     frame_id = 0
@@ -182,7 +170,6 @@ def main():
                 frame_id,
                 args.chunk_pixels,
                 args.retries,
-                args.status_dummy_bytes,
                 args.retry_backoff_ms / 1000.0,
             )
             t2 = time.time()

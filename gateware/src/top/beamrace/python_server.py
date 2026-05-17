@@ -161,9 +161,7 @@ def main():
 
     try:
         while True:
-            t0 = time.time()
             rgb = capture_rgb_bytes(picam)
-            t1 = time.time()
             upload_frame(
                 spi,
                 rgb,
@@ -171,11 +169,6 @@ def main():
                 args.chunk_pixels,
                 args.retries,
                 args.retry_backoff_ms / 1000.0,
-            )
-            t2 = time.time()
-            print(
-                f"Frame {frame_id}: capture={t1-t0:.2f}s upload={t2-t1:.2f}s "
-                f"total={t2-t0:.2f}s"
             )
             frame_id = (frame_id + 1) & 0xFF
     finally:

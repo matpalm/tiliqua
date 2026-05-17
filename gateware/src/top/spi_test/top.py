@@ -57,19 +57,108 @@ class SpiTest(wiring.Component):
         io_right=["", "", "", "", "", ""],
     )
 
-    # def __init__(self):
-    #     trained_weights = f"{CDCC_ROOT}/runs/{RUN}/weights/qkeras/latest.pkl"
-    #     if not os.path.exists(trained_weights):
-    #         raise Exception(
-    #             f"failed to load weights for CDCC_ROOT=[{CDCC_ROOT}] with $RUN=[{RUN}]"
-    #         )
-    #     print(f"loading weights from {trained_weights}")
-    #     self.qb_model = QbNetwork.build(trained_weights)
-    #     super().__init__()
-
     def elaborate(self, platform):
         m = Module()
-        wiring.connect(m, wiring.flipped(self.i), wiring.flipped(self.o))
+
+        # drive out0 based on whether we are processing SPI
+        # drive out1 based on whether we are returning 0x11 or 0x22
+        out0_value = Signal(shape=ASQ)
+        out1_value = Signal(shape=ASQ)
+        m.d.comb += [
+            self.o.payload[0].eq(out0_value),
+            self.o.payload[1].eq(out1_value),
+            self.o.payload[2].eq(0),
+            self.o.payload[3].eq(0),
+            self.o.valid.eq(self.i.valid),
+            self.i.ready.eq(self.o.ready),
+        ]
+
+        # connected to ex1, and we are only running one spi
+        ex_idx = 1
+        spi_idx = 0
+        platform.add_resources(
+            [
+                Resource(
+                    "spi",
+                    spi_idx,
+                    Subsignal("cs", Pins("1", dir="i", conn=("pmod", ex_idx))),
+                    Subsignal("sck", Pins("7", dir="i", conn=("pmod", ex_idx))),
+                    Subsignal("mosi", Pins("9", dir="i", conn=("pmod", ex_idx))),
+                    Subsignal("miso", Pins("8", dir="o", conn=("pmod", ex_idx))),
+                    Attrs(IO_TYPE="LVCMOS33", DRIVE="8"),
+                )
+            ]
+        )
+        spi = platform.request("spi", spi_idx)
+
+        cs_sync = Signal()
+        sck_sync = Signal()
+        mosi_sync = Signal()
+
+        m.submodules += [
+            FFSynchronizer(spi.cs.i, cs_sync),
+            FFSynchronizer(spi.sck.i, sck_sync),
+            FFSynchronizer(spi.mosi.i, mosi_sync),
+        ]
+
+        prev_cs = Signal(reset=1)
+        prev_sck = Signal()
+
+        bit_count = Signal(range(25))
+        rx_shift = Signal(24)
+
+        tx_shift = Signal(8)
+        tx_active = Signal()
+        tx_armed = Signal()
+
+        m.d.comb += spi.miso.o.eq(Mux(tx_active, tx_shift[7], 0))
+
+        with m.If(cs_sync):
+            m.d.sync += [
+                bit_count.eq(0),
+                tx_active.eq(0),
+                tx_armed.eq(0),
+                out0_value.eq(fixed.Const(-0.5, shape=ASQ)),
+            ]
+        with m.Else():
+            with m.If((~prev_sck) & sck_sync):
+                # SPI is MSB-first here, so shift left and insert new bit at LSB.
+                next_rx = Cat(mosi_sync, rx_shift[:-1])
+                m.d.sync += [
+                    rx_shift.eq(next_rx),
+                    bit_count.eq(bit_count + 1),
+                    out0_value.eq(fixed.Const(0.5, shape=ASQ)),
+                ]
+
+                # After exactly 3 received bytes, choose response byte.
+                with m.If(bit_count == 23):
+                    with m.If(next_rx == 0x010203):
+                        m.d.sync += [
+                            tx_shift.eq(0x11),
+                            tx_armed.eq(1),
+                            out1_value.eq(fixed.Const(0.5, shape=ASQ)),
+                        ]
+                    with m.Else():
+                        m.d.sync += [
+                            tx_shift.eq(0x22),
+                            tx_armed.eq(1),
+                            out1_value.eq(fixed.Const(-0.5, shape=ASQ)),
+                        ]
+                    m.d.sync += tx_active.eq(1)
+
+            # Shift response on SCK falling edges (SPI mode 0 style).
+            with m.If(prev_sck & (~sck_sync) & tx_active):
+                with m.If(tx_armed):
+                    # First falling edge after loading keeps MSB stable for first sample.
+                    m.d.sync += tx_armed.eq(0)
+                with m.Else():
+                    m.d.sync += tx_shift.eq((tx_shift << 1)[:8])
+
+        m.d.sync += [
+            prev_cs.eq(cs_sync),
+            prev_sck.eq(sck_sync),
+        ]
+
         return m
 
 

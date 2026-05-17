@@ -66,6 +66,10 @@ class EuroVidRackCore(wiring.Component):
 
     i: In(BeamRaceInputs())
     o: Out(BeamRaceOutputs())
+    spi_cs: In(1)
+    spi_sck: In(1)
+    spi_mosi: In(1)
+    spi_miso: Out(1)
 
     bitstream_help = BitstreamHelp(
         brief="Beamracing static EuroVidRack image",
@@ -88,6 +92,7 @@ class EuroVidRackCore(wiring.Component):
     OUT_W = IMAGE_W * SCALE
     OUT_H = IMAGE_H * SCALE
     SERIAL_SYNC_BURST = 8
+    N_PIXELS = IMAGE_W * IMAGE_H
     # SERIAL_SYNC_MARKER = 0
     # FEEDBACK_COLOUR_SPACE = "YUV"
     # FEEDBACK_COLOUR_SPACE = "RGB"
@@ -109,7 +114,11 @@ class EuroVidRackCore(wiring.Component):
             (int(px[0]) << 16) | (int(px[1]) << 8) | int(px[2]) for px in pixels
         ]
 
-        # Store the static source image and the mutable feedback image.
+        self.spi_incoming_img = Memory(
+            width=8 * 3,
+            depth=self.IMAGE_W * self.IMAGE_H,
+            init=packed_pixels,
+        )
         self.original_img = Memory(
             width=8 * 3,
             depth=self.IMAGE_W * self.IMAGE_H,
@@ -215,6 +224,12 @@ class EuroVidRackCore(wiring.Component):
         m.submodules.original_tx_rp = original_tx_rp = self.original_img.read_port(
             domain="sync"
         )
+        m.submodules.spi_incoming_wp = spi_incoming_wp = (
+            self.spi_incoming_img.write_port(domain="sync")
+        )
+        m.submodules.original_wp = original_wp = self.original_img.write_port(
+            domain="sync"
+        )
 
         # Feedback image uses independent read ports for display and read-modify-write.
         m.submodules.feedback_display_rp = feedback_display_rp = (
@@ -226,6 +241,51 @@ class EuroVidRackCore(wiring.Component):
         m.submodules.feedback_wp = feedback_wp = self.feedback_img.write_port(
             domain="sync"
         )
+
+        # SPI image ingest state.
+        spi_prev_cs = Signal(init=1)
+        spi_prev_sck = Signal()
+        spi_bit_count = Signal(range(8))
+        spi_rx_shift = Signal(8)
+        spi_tx_shift = Signal(8)
+        spi_tx_active = Signal()
+        spi_tx_armed = Signal()
+
+        spi_stage = Signal(range(10))
+        pkt_frame_id = Signal(8)
+        pkt_off_hi = Signal(8)
+        pkt_len_hi = Signal(8)
+        pkt_pix_off = Signal(range(self.N_PIXELS))
+        pkt_pix_len = Signal(range(self.N_PIXELS + 1))
+        pkt_bytes_left = Signal(16)
+        pkt_pixel_addr = Signal(range(self.N_PIXELS))
+        payload_byte_pos = Signal(range(3))
+        payload_r = Signal(8)
+        payload_g = Signal(8)
+        crc_calc = Signal(16, init=0xFFFF)
+        crc_hi = Signal(8)
+
+        spi_wr_en = Signal()
+        spi_wr_addr = Signal(range(self.N_PIXELS))
+        spi_wr_data = Signal(24)
+
+        m.d.comb += [
+            self.spi_miso.eq(Mux(spi_tx_active, spi_tx_shift[7], 0)),
+            spi_incoming_wp.en.eq(spi_wr_en),
+            spi_incoming_wp.addr.eq(spi_wr_addr),
+            spi_incoming_wp.data.eq(spi_wr_data),
+            original_wp.en.eq(spi_wr_en),
+            original_wp.addr.eq(spi_wr_addr),
+            original_wp.data.eq(spi_wr_data),
+        ]
+
+        def crc16_next(crc, byte):
+            val = Value.cast(crc)
+            byte = Value.cast(byte)
+            for i in range(8):
+                bit = val[15] ^ byte[7 - i]
+                val = Mux(bit, ((val << 1) ^ 0x1021) & 0xFFFF, (val << 1) & 0xFFFF)
+            return val
 
         m.d.comb += [
             # image is 1/8 output size
@@ -305,6 +365,134 @@ class EuroVidRackCore(wiring.Component):
             self.serial_tx_sync_active.eq(tx_sync_count != 0),
         ]
 
+        m.d.sync += spi_wr_en.eq(0)
+
+        with m.If(self.spi_cs):
+            m.d.sync += [
+                spi_stage.eq(0),
+                spi_bit_count.eq(0),
+                spi_tx_active.eq(0),
+                spi_tx_armed.eq(0),
+                pkt_bytes_left.eq(0),
+                payload_byte_pos.eq(0),
+            ]
+        with m.Else():
+            with m.If((~spi_prev_sck) & self.spi_sck):
+                next_byte = Cat(self.spi_mosi, spi_rx_shift[:-1])
+                m.d.sync += spi_rx_shift.eq(next_byte)
+                with m.If(spi_bit_count == 7):
+                    m.d.sync += spi_bit_count.eq(0)
+                    with m.Switch(spi_stage):
+                        with m.Case(0):
+                            with m.If(next_byte == 0xA5):
+                                m.d.sync += spi_stage.eq(1)
+                        with m.Case(1):
+                            with m.If(next_byte == 0x5A):
+                                m.d.sync += spi_stage.eq(2)
+                            with m.Else():
+                                m.d.sync += spi_stage.eq(0)
+                        with m.Case(2):
+                            m.d.sync += [
+                                pkt_frame_id.eq(next_byte),
+                                crc_calc.eq(crc16_next(0xFFFF, next_byte)),
+                                spi_stage.eq(3),
+                            ]
+                        with m.Case(3):
+                            m.d.sync += [
+                                pkt_off_hi.eq(next_byte),
+                                crc_calc.eq(crc16_next(crc_calc, next_byte)),
+                                spi_stage.eq(4),
+                            ]
+                        with m.Case(4):
+                            pix_off = Cat(next_byte, pkt_off_hi)
+                            m.d.sync += [
+                                pkt_pix_off.eq(pix_off),
+                                crc_calc.eq(crc16_next(crc_calc, next_byte)),
+                                spi_stage.eq(5),
+                            ]
+                        with m.Case(5):
+                            m.d.sync += [
+                                pkt_len_hi.eq(next_byte),
+                                crc_calc.eq(crc16_next(crc_calc, next_byte)),
+                                spi_stage.eq(6),
+                            ]
+                        with m.Case(6):
+                            pix_len = Cat(next_byte, pkt_len_hi)
+                            m.d.sync += crc_calc.eq(crc16_next(crc_calc, next_byte))
+                            with m.If(
+                                (pix_len > 0)
+                                & ((pkt_pix_off + pix_len) <= self.N_PIXELS)
+                            ):
+                                m.d.sync += [
+                                    pkt_pix_len.eq(pix_len),
+                                    pkt_bytes_left.eq(pix_len * 3),
+                                    pkt_pixel_addr.eq(pkt_pix_off),
+                                    payload_byte_pos.eq(0),
+                                    spi_stage.eq(7),
+                                ]
+                            with m.Else():
+                                m.d.sync += [
+                                    spi_tx_shift.eq(0xE1),
+                                    spi_tx_active.eq(1),
+                                    spi_tx_armed.eq(1),
+                                    spi_stage.eq(0),
+                                ]
+                        with m.Case(7):
+                            m.d.sync += [
+                                crc_calc.eq(crc16_next(crc_calc, next_byte)),
+                                pkt_bytes_left.eq(pkt_bytes_left - 1),
+                            ]
+                            with m.If(payload_byte_pos == 0):
+                                m.d.sync += [
+                                    payload_r.eq(next_byte),
+                                    payload_byte_pos.eq(1),
+                                ]
+                            with m.Elif(payload_byte_pos == 1):
+                                m.d.sync += [
+                                    payload_g.eq(next_byte),
+                                    payload_byte_pos.eq(2),
+                                ]
+                            with m.Else():
+                                m.d.sync += [
+                                    payload_byte_pos.eq(0),
+                                    spi_wr_en.eq(1),
+                                    spi_wr_addr.eq(pkt_pixel_addr),
+                                    spi_wr_data.eq(
+                                        Cat(next_byte, payload_g, payload_r)
+                                    ),
+                                    pkt_pixel_addr.eq(pkt_pixel_addr + 1),
+                                ]
+                            with m.If(pkt_bytes_left == 1):
+                                m.d.sync += spi_stage.eq(8)
+                        with m.Case(8):
+                            m.d.sync += [
+                                crc_hi.eq(next_byte),
+                                spi_stage.eq(9),
+                            ]
+                        with m.Case(9):
+                            with m.If(Cat(next_byte, crc_hi) == crc_calc):
+                                m.d.sync += [
+                                    spi_tx_shift.eq(0x11),
+                                    spi_tx_active.eq(1),
+                                    spi_tx_armed.eq(1),
+                                    spi_stage.eq(0),
+                                ]
+                            with m.Else():
+                                m.d.sync += [
+                                    spi_tx_shift.eq(0xE2),
+                                    spi_tx_active.eq(1),
+                                    spi_tx_armed.eq(1),
+                                    spi_stage.eq(0),
+                                ]
+                with m.Else():
+                    m.d.sync += spi_bit_count.eq(spi_bit_count + 1)
+
+            with m.If(spi_prev_sck & (~self.spi_sck) & spi_tx_active):
+                with m.If(spi_tx_armed):
+                    m.d.sync += spi_tx_armed.eq(0)
+                with m.Else():
+                    m.d.sync += spi_tx_shift.eq((spi_tx_shift << 1)[:8])
+
         # if use_yuv:
         #     m.d.comb += [
         #         fb_y.eq(feedback_display_rp.data[16:24]),
@@ -327,6 +515,8 @@ class EuroVidRackCore(wiring.Component):
             audio_tick_d.eq(self.i.audio_tick),
             rx_data_d1.eq(audio_sync[2]),
             rx_data_d2.eq(rx_data_d1),
+            spi_prev_cs.eq(self.spi_cs),
+            spi_prev_sck.eq(self.spi_sck),
         ]
 
         # choose receive delay based on in0: 0, 1, or 2 samples.
@@ -455,6 +645,23 @@ class EuroVidRack(Elaboratable):
             m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
             wiring.connect(m, self.pmod0.pins, pmod0_provider.pins)
             m.d.comb += self.pmod0.codec_mute.eq(reboot.mute)
+
+            ex_idx = 1
+            spi_idx = 0
+            platform.add_resources(
+                [
+                    Resource(
+                        "beamrace_spi",
+                        spi_idx,
+                        Subsignal("cs", Pins("1", dir="i", conn=("pmod", ex_idx))),
+                        Subsignal("sck", Pins("7", dir="i", conn=("pmod", ex_idx))),
+                        Subsignal("mosi", Pins("9", dir="i", conn=("pmod", ex_idx))),
+                        Subsignal("miso", Pins("8", dir="o", conn=("pmod", ex_idx))),
+                        Attrs(IO_TYPE="LVCMOS33", DRIVE="8"),
+                    )
+                ]
+            )
+            spi = platform.request("beamrace_spi", spi_idx)
         else:
             m.submodules.car = sim.FakeTiliquaDomainGenerator()
 
@@ -468,6 +675,28 @@ class EuroVidRack(Elaboratable):
 
         # Beamracer core itself
         m.submodules.core = core = self.core
+
+        if sim.is_hw(platform):
+            spi_cs_dvi = Signal()
+            spi_sck_dvi = Signal()
+            spi_mosi_dvi = Signal()
+            m.submodules += [
+                FFSynchronizer(spi.cs.i, spi_cs_dvi, o_domain="dvi"),
+                FFSynchronizer(spi.sck.i, spi_sck_dvi, o_domain="dvi"),
+                FFSynchronizer(spi.mosi.i, spi_mosi_dvi, o_domain="dvi"),
+            ]
+            m.d.comb += [
+                core.spi_cs.eq(spi_cs_dvi),
+                core.spi_sck.eq(spi_sck_dvi),
+                core.spi_mosi.eq(spi_mosi_dvi),
+                spi.miso.o.eq(core.spi_miso),
+            ]
+        else:
+            m.d.comb += [
+                core.spi_cs.eq(1),
+                core.spi_sck.eq(0),
+                core.spi_mosi.eq(0),
+            ]
 
         # Audio routing: channel 3 carries serialized image samples, channel 4 carries sync framing.
         sample_stb = Signal()

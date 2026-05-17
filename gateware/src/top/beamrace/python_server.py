@@ -41,6 +41,7 @@ def capture_rgb_bytes(picam, tmp_path):
     picam.capture_file(tmp_path)
 
     with Image.open(tmp_path).convert("RGB") as img:
+        print("full size", img.size)
         img_small = img.resize((IMAGE_W, IMAGE_H))
         return list(img_small.tobytes())
 
@@ -109,6 +110,9 @@ def main():
     tmp_path = Path(args.tmp_image)
 
     picam = Picamera2()
+    # we want to capture as lo res as possible
+    config = picam.create_still_configuration(main={"size": (320, 240)})
+    picam.configure(config)
     picam.start()
     time.sleep(2.0)
 

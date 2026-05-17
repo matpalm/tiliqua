@@ -49,10 +49,6 @@ def decode_status(tail):
     return tail[-1]
 
 
-def crc16_ccitt(data):
-    return binascii.crc_hqx(data, 0xFFFF)
-
-
 def capture_rgb_bytes(picam):
     frame = picam.capture_array("main")
     if frame.ndim == 3 and frame.shape[2] >= 3:
@@ -75,7 +71,7 @@ def packet_for_chunk(frame_id, pix_off, rgb_payload):
             pix_len & 0xFF,
         ]
     )
-    crc = crc16_ccitt(header)
+    crc = binascii.crc_hqx(header, 0xFFFF)
     crc = binascii.crc_hqx(rgb_payload, crc)
 
     packet = bytearray(2 + len(header) + len(rgb_payload) + 2)

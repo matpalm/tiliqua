@@ -8,6 +8,8 @@ User=pi
 WorkingDirectory=/home/pi/img_capture
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /home/pi/img_capture/python_server.py --hz 10000000 --chunk-pixels 1024
+Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target

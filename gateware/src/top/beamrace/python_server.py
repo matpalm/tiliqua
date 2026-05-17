@@ -37,9 +37,9 @@ def crc16_ccitt(data):
     return crc
 
 
-def capture_rgb_bytes(picam, tmp_path):
+def capture_rgb_bytes(picam):
+    tmp_path = "/tmp/capture.png"
     picam.capture_file(tmp_path)
-
     with Image.open(tmp_path).convert("RGB") as img:
         print("full size", img.size)
         img_small = img.resize((IMAGE_W, IMAGE_H))
@@ -60,6 +60,7 @@ def packet_for_chunk(frame_id, pix_off, rgb_payload):
 
 
 def upload_frame(spi, rgb_bytes, frame_id, chunk_pixels, retries):
+    # TODO: maybe better to do per plane?
     if len(rgb_bytes) != N_PIXELS * 3:
         raise ValueError(f"Expected {N_PIXELS*3} bytes, got {len(rgb_bytes)}")
 
@@ -93,21 +94,17 @@ def upload_frame(spi, rgb_bytes, frame_id, chunk_pixels, retries):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bus", type=int, default=0)
-    parser.add_argument("--dev", type=int, default=0)
     parser.add_argument("--hz", type=int, default=1_000_000)
     parser.add_argument("--chunk-pixels", type=int, default=128)
     parser.add_argument("--retries", type=int, default=4)
-    parser.add_argument("--tmp-image", default="beamrace_capture.full.png")
     args = parser.parse_args()
 
     spi = spidev.SpiDev()
-    spi.open(args.bus, args.dev)
+    spi.open(0, 0)
     spi.max_speed_hz = args.hz
     spi.mode = 0
 
     frame_id = 0
-    tmp_path = Path(args.tmp_image)
 
     picam = Picamera2()
     # we want to capture as lo res as possible
@@ -119,7 +116,7 @@ def main():
     try:
         while True:
             t0 = time.time()
-            rgb = capture_rgb_bytes(picam, tmp_path)
+            rgb = capture_rgb_bytes(picam)
             t1 = time.time()
             upload_frame(spi, rgb, frame_id, args.chunk_pixels, args.retries)
             t2 = time.time()

@@ -36,11 +36,8 @@ sys.path.insert(0, f"{CDCC_ROOT}/amaranth_version/src")
 from cdcc import NNQ
 from cdcc.qb_network import QbNetwork
 
+
 class NeuralWaveshaper(wiring.Component):
-    """
-    Route audio inputs straight to outputs (in the audio domain).
-    This is the simplest possible core, useful for basic tests.
-    """
 
     i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
     o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
@@ -76,18 +73,14 @@ class NeuralWaveshaper(wiring.Component):
         m.submodules.qb_model = self.qb_model
         m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
-        # map inputs.
-        # note: model is currently (x, e0, e1, 0)
-        # ( with an expected 0 values for in3 )
+        # map inputs from ASQ to NNQ
+        # quadrature model is (sin x, cos x, e0, e1)
         model_input = Array(Signal(NNQ, name=f"model_input_k{k}") for k in range(4))
         for c in range(4):
             m.d.comb += [
                 model_input[c].eq(self.i.payload[c]),
                 self.qb_model.i.payload[c].eq(model_input[c]),
             ]
-        # m.d.comb += [
-        #     self.qb_model.i.payload[3].eq(0),
-        # ]
 
         # The model only outputs one value (on out0),
         # saturate to ASQ and output a filtered and unfiltered version

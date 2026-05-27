@@ -3,8 +3,8 @@ Neural waveshaper
 """
 
 import math
-from scipy.interpolate import CubicHermiteSpline
 import sys
+import pickle
 import os
 
 from amaranth_future import fixed
@@ -35,12 +35,15 @@ if RUN is None:
 sys.path.insert(0, f"{CDCC_ROOT}/amaranth_version/src")
 from cdcc import NNQ
 from cdcc.qb_network import QbNetwork
-
+from cdcc.cosine_estimator import CosineEstimator
 
 class NeuralWaveshaper(wiring.Component):
 
     i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
     o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
+
+    # Jack detection (directly from pmod hardware)
+    jack: In(unsigned(8))
 
     bitstream_help = BitstreamHelp(
         brief="Neural waveshaper.",
@@ -49,8 +52,8 @@ class NeuralWaveshaper(wiring.Component):
             "core cosine wave",
             "embedding x",
             "embedding y",
+            "waveshaped with lpf",
             "waveshaped",
-            "",
             "",
             "",
         ],
@@ -70,17 +73,35 @@ class NeuralWaveshaper(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
+        # network mapping 4 in to 1 out
         m.submodules.qb_model = self.qb_model
+
+        # post network low pass filter
         m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
-        # map inputs from ASQ to NNQ
+        # a cosine estimator driven from in0 sine wave
+        # fed to network if in1 is not patched
+        m.submodules.ce = ce = CosineEstimator(shape=ASQ)
+
+        # connect in0 (sin) to the in1 (cos) estimator
+        m.d.comb += [
+            ce.i.payload.eq(self.i.payload[0]),
+            ce.i.valid.eq(self.i.valid),
+            ce.o.ready.eq(self.qb_model.o.ready),
+        ]
+
+        # map inputs from ASQ input to NNQ for model
         # quadrature model is (sin x, cos x, e0, e1)
+        # ( in1 normalled to the estimated cosine from in0 )
         model_input = Array(Signal(NNQ, name=f"model_input_k{k}") for k in range(4))
         for c in range(4):
-            m.d.comb += [
-                model_input[c].eq(self.i.payload[c]),
-                self.qb_model.i.payload[c].eq(model_input[c]),
-            ]
+            if c == 1:
+                m.d.comb += model_input[1].eq(
+                    Mux(self.jack[1], self.i.payload[1], ce.o.payload)
+                )
+            else:
+                m.d.comb += model_input[c].eq(self.i.payload[c])
+            m.d.comb += self.qb_model.i.payload[c].eq(model_input[c])
 
         # The model only outputs one value (on out0),
         # saturate to ASQ and output a filtered and unfiltered version
@@ -151,18 +172,7 @@ class CoreTop(Elaboratable):
         m.submodules.core = self.core
         wiring.connect(m, pmod0.o_cal, self.core.i)
         wiring.connect(m, self.core.o, pmod0.i_cal)
-
-        # if hasattr(self.core, "i_midi") and sim.is_hw(platform):
-        #     # For now, if a core requests midi input, we connect it up
-        #     # to the type-A serial MIDI RX input. In theory this bytestream
-        #     # could also come from LUNA in host or device mode.
-        #     midi_pins = platform.request("midi")
-        #     m.submodules.serialrx = serialrx = midi.SerialRx(
-        #         system_clk_hz=60e6, pins=midi_pins
-        #     )
-        #     m.submodules.midi_decode = midi_decode = midi.MidiDecodeSerial()
-        #     wiring.connect(m, serialrx.o, midi_decode.i)
-        #     wiring.connect(m, midi_decode.o, self.core.i_midi)
+        m.d.comb += self.core.jack.eq(pmod0.jack)
 
         if hasattr(self.core, "bus"):
             m.submodules.psram_periph = self.psram_periph

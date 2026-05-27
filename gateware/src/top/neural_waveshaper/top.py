@@ -61,13 +61,11 @@ class NeuralWaveshaper(wiring.Component):
     )
 
     def __init__(self):
-        trained_weights = f"{CDCC_ROOT}/runs/{RUN}/weights/qkeras/latest.pkl"
-        if not os.path.exists(trained_weights):
-            raise Exception(
-                f"failed to load weights for CDCC_ROOT=[{CDCC_ROOT}] with $RUN=[{RUN}]"
-            )
-        print(f"loading weights from {trained_weights}")
-        self.qb_model = QbNetwork.build(trained_weights)
+        WEIGHTS_PKL = os.getenv("WEIGHTS_PKL")
+        if not os.path.exists(WEIGHTS_PKL):
+            raise Exception(f"failed to load weights for WEIGHTS_PKL=[{WEIGHTS_PKL}]")
+        print(f"loading weights from {WEIGHTS_PKL}")
+        self.qb_model = QbNetwork.build(WEIGHTS_PKL)
         super().__init__()
 
     def elaborate(self, platform):
@@ -80,14 +78,25 @@ class NeuralWaveshaper(wiring.Component):
         m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
         # a cosine estimator driven from in0 sine wave
-        # fed to network if in1 is not patched
+        # fed to network if in1 is not patched.
         m.submodules.ce = ce = CosineEstimator(shape=ASQ)
+        estimated_cosine_nnq = Signal(NNQ)
+        m.d.comb += estimated_cosine_nnq.eq(ce.o.payload)
+
+        # delay model input a bit since ce is delayed one.
+        accepted = Signal()
+        input_d = Array(Signal(NNQ, name=f"input_d_k{k}") for k in range(4))
+
+        m.d.comb += accepted.eq(self.i.valid & self.qb_model.i.ready)
+        with m.If(accepted):
+            for c in range(4):
+                m.d.sync += input_d[c].eq(self.i.payload[c])
 
         # connect in0 (sin) to the in1 (cos) estimator
         m.d.comb += [
             ce.i.payload.eq(self.i.payload[0]),
-            ce.i.valid.eq(self.i.valid),
-            ce.o.ready.eq(self.qb_model.o.ready),
+            ce.i.valid.eq(accepted),
+            ce.o.ready.eq(1),
         ]
 
         # map inputs from ASQ input to NNQ for model
@@ -97,14 +106,15 @@ class NeuralWaveshaper(wiring.Component):
         for c in range(4):
             if c == 1:
                 m.d.comb += model_input[1].eq(
-                    Mux(self.jack[1], self.i.payload[1], ce.o.payload)
+                    Mux(self.jack[1], input_d[1], estimated_cosine_nnq)
                 )
             else:
-                m.d.comb += model_input[c].eq(self.i.payload[c])
+                m.d.comb += model_input[c].eq(input_d[c])
             m.d.comb += self.qb_model.i.payload[c].eq(model_input[c])
 
         # The model only outputs one value (on out0),
         # saturate to ASQ and output a filtered and unfiltered version
+        # TODO: should this be saturate? or just comb eq ?
         waveshaped_out = Signal(NNQ)
         saturated_waveshaped_out = waveshaped_out.saturate(ASQ)
         m.d.comb += [
@@ -114,13 +124,13 @@ class NeuralWaveshaper(wiring.Component):
             self.o.payload[0].eq(post_lpf.o.payload),
             self.o.payload[1].eq(saturated_waveshaped_out),
             self.o.payload[2].eq(0),
-            self.o.payload[3].eq(0),
+            self.o.payload[3].eq(estimated_cosine_nnq),
         ]
 
         # wire up ready and valid
         # TODO: could wiring.connect do all this?
         m.d.comb += [
-            self.qb_model.i.valid.eq(self.i.valid),
+            self.qb_model.i.valid.eq(ce.o.valid),
             self.i.ready.eq(self.qb_model.i.ready),
             post_lpf.i.valid.eq(self.qb_model.o.valid),
             self.qb_model.o.ready.eq(post_lpf.i.ready),

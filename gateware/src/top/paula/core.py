@@ -1,20 +1,25 @@
 from amaranth import *
 from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
+import json
+from pathlib import Path
 
 from tiliqua import midi
 from tiliqua.dsp import ASQ
 
 from sample import Sample
 
-
 class PaulaRecorderCore(wiring.Component):
 
-    RECORD_NOTE0 = 44
-    PLAY_NOTE0 = 36
-    RECORD_NOTE1 = 45
-    PLAY_NOTE1 = 37
-    MIDI_CHANNEL = 0  # CH1 => control mode on BSP
+    cfg_path = Path(__file__).with_name("config.json")
+    with open(cfg_path, "r") as f:
+        cfg = json.loads(f.read())
+
+    MIDI_CHANNEL = cfg["samples"]["midi_channel"]
+    RECORD_NOTE0 = cfg["samples"]["slots"][0]["record_note"]
+    PLAY_NOTE0 = cfg["samples"]["slots"][0]["play_note"]
+    RECORD_NOTE1 = cfg["samples"]["slots"][1]["record_note"]
+    PLAY_NOTE1 = cfg["samples"]["slots"][1]["play_note"]
 
     i_midi: In(stream.Signature(midi.MidiMessage))
     i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))

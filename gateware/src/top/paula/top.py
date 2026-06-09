@@ -1,14 +1,13 @@
 """
 Paula recorder/playback scaffold using on-chip EBR.
 
-Records mono 8-bit PCM from input channel 0 and plays one-shot to output
-channel 0. Recording is deterministically decimated from 48 kHz input to
-14.4 kHz capture rate using a fixed 3/10 phase accumulator.
+Implements two independent mono sampler paths:
 
-MIDI NOTE_ON events on channel 1 control the transport:
+- sample 0: in0 -> out0, notes 44 (record toggle) / 36 (playback)
+- sample 1: in1 -> out1, notes 45 (record toggle) / 37 (playback)
 
-- note 44: pad c# in ctrl mode on BSP start / stops recording
-- note 36: pad c in ctrl mode on BSP triggers one-shot playback from sample start
+Recording is deterministically decimated from 48 kHz input to 14.4 kHz
+capture rate using a fixed 3/10 phase accumulator.
 """
 
 from amaranth import *
@@ -26,14 +25,81 @@ from tiliqua.platform import RebootProvider
 
 class PaulaRecorderCore(wiring.Component):
 
+    RECORD_NOTE0 = 44
+    PLAY_NOTE0 = 36
+    RECORD_NOTE1 = 45
+    PLAY_NOTE1 = 37
+    MIDI_CHANNEL = 0  # CH1 => control mode on BSP
+
+    i_midi: In(stream.Signature(midi.MidiMessage))
+    i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
+    o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
+
+    def elaborate(self, platform):
+        m = Module()
+
+        sample_accepted = Signal()
+
+        rec_evt0 = Signal()
+        play_evt0 = Signal()
+        rec_evt1 = Signal()
+        play_evt1 = Signal()
+
+        m.d.comb += [
+            self.i.ready.eq(self.o.ready),
+            self.o.valid.eq(self.i.valid),
+            self.i_midi.ready.eq(1),
+            sample_accepted.eq(self.i.valid & self.o.ready),
+            rec_evt0.eq(0),
+            play_evt0.eq(0),
+            rec_evt1.eq(0),
+            play_evt1.eq(0),
+        ]
+
+        with m.If(self.i_midi.valid):
+            msg = self.i_midi.payload
+            with m.If(
+                (msg.status.kind == midi.Status.Kind.NOTE_ON)
+                & (msg.status.nibble.channel == self.MIDI_CHANNEL)
+                & (msg.midi_payload.note_on.velocity != 0)
+            ):
+                with m.Switch(msg.midi_payload.note_on.note):
+                    with m.Case(self.RECORD_NOTE0):
+                        m.d.comb += rec_evt0.eq(1)
+                    with m.Case(self.PLAY_NOTE0):
+                        m.d.comb += play_evt0.eq(1)
+                    with m.Case(self.RECORD_NOTE1):
+                        m.d.comb += rec_evt1.eq(1)
+                    with m.Case(self.PLAY_NOTE1):
+                        m.d.comb += play_evt1.eq(1)
+
+        m.submodules.sample0 = sample0 = Sample()
+        m.submodules.sample1 = sample1 = Sample()
+
+        m.d.comb += [
+            sample0.i_sample.eq(self.i.payload[0]),
+            sample0.sample_tick.eq(sample_accepted),
+            sample0.record_toggle_evt.eq(rec_evt0),
+            sample0.playback_evt.eq(play_evt0),
+            sample1.i_sample.eq(self.i.payload[1]),
+            sample1.sample_tick.eq(sample_accepted),
+            sample1.record_toggle_evt.eq(rec_evt1),
+            sample1.playback_evt.eq(play_evt1),
+            self.o.payload[0].eq(sample0.o_sample),
+            self.o.payload[1].eq(sample1.o_sample),
+            self.o.payload[2].eq(0),
+            self.o.payload[3].eq(0),
+        ]
+
+        return m
+
+
+class Sample(wiring.Component):
+
     class PlayState(enum.Enum, shape=unsigned(2)):
         IDLE = 0
         PREFETCH = 1
         PLAY = 2
-
-    RECORD_NOTE = 44
-    PLAY_NOTE = 36
-    MIDI_CHANNEL = 0  # CH1 => control mode on BSP
 
     RECORD_SECONDS = 2
     INPUT_FS = 48000
@@ -42,9 +108,11 @@ class PaulaRecorderCore(wiring.Component):
     CAPTURE_DEN = 10
     MAX_CAPTURE_SAMPLES = RECORD_SECONDS * CAPTURE_FS
 
-    i_midi: In(stream.Signature(midi.MidiMessage))
-    i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
-    o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
+    i_sample: In(ASQ)
+    sample_tick: In(1)
+    record_toggle_evt: In(1)
+    playback_evt: In(1)
+    o_sample: Out(ASQ)
 
     def elaborate(self, platform):
         m = Module()
@@ -67,10 +135,6 @@ class PaulaRecorderCore(wiring.Component):
         # Deterministic decimator phase for 48 kHz -> 14.4 kHz (3/10 ratio).
         decim_acc = Signal(range(self.CAPTURE_DEN), init=0)
 
-        sample_accepted = Signal()
-        record_toggle_evt = Signal()
-        playback_evt = Signal()
-
         sample_i16 = Signal(signed(ASQ.as_shape().width))
         sample_q8 = Signal(signed(8))
 
@@ -84,39 +148,20 @@ class PaulaRecorderCore(wiring.Component):
         do_read = Signal()
 
         m.d.comb += [
-            self.i.ready.eq(self.o.ready),
-            self.o.valid.eq(self.i.valid),
-            self.i_midi.ready.eq(1),
-            sample_accepted.eq(self.i.valid & self.o.ready),
-            # Channel 0 is the audio output in this milestone.
-            self.o.payload[0].eq(0),
-            self.o.payload[1].eq(0),
-            self.o.payload[2].eq(0),
-            self.o.payload[3].eq(0),
-            sample_i16.eq(self.i.payload[0].as_value()),
+            self.o_sample.eq(0),
+            sample_i16.eq(self.i_sample.as_value()),
             sample_q8.eq(sample_i16 >> 8),
-            record_toggle_evt.eq(0),
-            playback_evt.eq(0),
         ]
 
-        with m.If(self.i_midi.valid):
-            msg = self.i_midi.payload
-            with m.If(
-                (msg.status.kind == midi.Status.Kind.NOTE_ON)
-                & (msg.status.nibble.channel == self.MIDI_CHANNEL)
-                & (msg.midi_payload.note_on.velocity != 0)
-            ):
-                with m.If(msg.midi_payload.note_on.note == self.RECORD_NOTE):
-                    m.d.comb += record_toggle_evt.eq(1)
-                with m.Elif(msg.midi_payload.note_on.note == self.PLAY_NOTE):
-                    m.d.comb += playback_evt.eq(1)
-
         with m.If(play_state == self.PlayState.PLAY):
-            m.d.comb += self.o.payload[0].as_value().eq(rd.data << 8)
+            m.d.comb += self.o_sample.as_value().eq(rd.data << 8)
 
         m.d.comb += [
             do_record_input.eq(
-                sample_accepted & recording & ~record_toggle_evt & ~playback_evt
+                self.sample_tick
+                & recording
+                & ~self.record_toggle_evt
+                & ~self.playback_evt
             ),
             do_capture_strobe.eq(do_record_input & (decim_acc >= 7)),
             do_write.eq(do_capture_strobe & (write_addr < self.MAX_CAPTURE_SAMPLES)),
@@ -124,16 +169,16 @@ class PaulaRecorderCore(wiring.Component):
             wr.addr.eq(write_addr),
             wr.data.eq(sample_q8),
             do_prefetch.eq(
-                sample_accepted
+                self.sample_tick
                 & (play_state == self.PlayState.PREFETCH)
-                & ~record_toggle_evt
-                & ~playback_evt
+                & ~self.record_toggle_evt
+                & ~self.playback_evt
             ),
             do_play_tick.eq(
-                sample_accepted
+                self.sample_tick
                 & (play_state == self.PlayState.PLAY)
-                & ~record_toggle_evt
-                & ~playback_evt
+                & ~self.record_toggle_evt
+                & ~self.playback_evt
             ),
             do_play_advance.eq(do_play_tick & (play_acc >= 7)),
             play_last.eq((play_count + 1) >= valid_length),
@@ -142,7 +187,7 @@ class PaulaRecorderCore(wiring.Component):
             rd.addr.eq(play_addr),
         ]
 
-        with m.If(record_toggle_evt):
+        with m.If(self.record_toggle_evt):
             with m.If(recording):
                 m.d.sync += recording.eq(0)
             with m.Else():
@@ -156,7 +201,7 @@ class PaulaRecorderCore(wiring.Component):
                     play_count.eq(0),
                     play_acc.eq(0),
                 ]
-        with m.Elif(playback_evt):
+        with m.Elif(self.playback_evt):
             with m.If(valid_length != 0):
                 m.d.sync += [
                     recording.eq(0),
@@ -212,12 +257,12 @@ class PaulaTop(Elaboratable):
     bitstream_help = BitstreamHelp(
         brief="Paula record/playback (EBR, 2s max)",
         io_left=[
-            "sample in",
+            "sample0 in",
+            "sample1 in",
             "cv reserve 0",
-            "cv reserve 1",
             "",
-            "sample out",
-            "",
+            "sample0 out",
+            "sample1 out",
             "",
             "",
         ],

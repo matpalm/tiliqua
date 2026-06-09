@@ -2,10 +2,13 @@
 Paula recorder/playback scaffold using on-chip EBR.
 
 Records mono 8-bit PCM from input channel 0 and plays one-shot to output
-channel 0. MIDI NOTE_ON events on channel 10 control the transport:
+channel 0. Recording is deterministically decimated from 48 kHz input to
+14.4 kHz capture rate using a fixed 3/10 phase accumulator.
 
-- note 48: toggle record start/stop
-- note 47: trigger one-shot playback from sample start
+MIDI NOTE_ON events on channel 1 control the transport:
+
+- note 44: pad c# in ctrl mode on BSP start / stops recording
+- note 36: pad c in ctrl mode on BSP triggers one-shot playback from sample start
 """
 
 from amaranth import *
@@ -33,8 +36,11 @@ class PaulaRecorderCore(wiring.Component):
     MIDI_CHANNEL = 0  # CH1 => control mode on BSP
 
     RECORD_SECONDS = 2
-    RECORD_FS = 48000
-    MAX_SAMPLES = RECORD_SECONDS * RECORD_FS
+    INPUT_FS = 48000
+    CAPTURE_FS = 14400
+    CAPTURE_NUM = 3
+    CAPTURE_DEN = 10
+    MAX_CAPTURE_SAMPLES = RECORD_SECONDS * CAPTURE_FS
 
     i_midi: In(stream.Signature(midi.MidiMessage))
     i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
@@ -44,18 +50,22 @@ class PaulaRecorderCore(wiring.Component):
         m = Module()
 
         m.submodules.sample_mem = sample_mem = Memory(
-            shape=signed(8), depth=self.MAX_SAMPLES, init=[]
+            shape=signed(8), depth=self.MAX_CAPTURE_SAMPLES, init=[]
         )
         wr = sample_mem.write_port()
         rd = sample_mem.read_port()
 
         recording = Signal(init=0)
-        valid_length = Signal(range(self.MAX_SAMPLES + 1), init=0)
-        write_addr = Signal(range(self.MAX_SAMPLES + 1), init=0)
+        valid_length = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
+        write_addr = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
 
         play_state = Signal(self.PlayState, init=self.PlayState.IDLE)
-        play_addr = Signal(range(self.MAX_SAMPLES + 1), init=0)
-        play_count = Signal(range(self.MAX_SAMPLES + 1), init=0)
+        play_addr = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
+        play_count = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
+        play_acc = Signal(range(self.CAPTURE_DEN), init=0)
+
+        # Deterministic decimator phase for 48 kHz -> 14.4 kHz (3/10 ratio).
+        decim_acc = Signal(range(self.CAPTURE_DEN), init=0)
 
         sample_accepted = Signal()
         record_toggle_evt = Signal()
@@ -65,8 +75,11 @@ class PaulaRecorderCore(wiring.Component):
         sample_q8 = Signal(signed(8))
 
         do_write = Signal()
+        do_capture_strobe = Signal()
+        do_record_input = Signal()
         do_prefetch = Signal()
-        do_play_emit = Signal()
+        do_play_tick = Signal()
+        do_play_advance = Signal()
         play_last = Signal()
         do_read = Signal()
 
@@ -102,13 +115,11 @@ class PaulaRecorderCore(wiring.Component):
             m.d.comb += self.o.payload[0].as_value().eq(rd.data << 8)
 
         m.d.comb += [
-            do_write.eq(
-                sample_accepted
-                & recording
-                & (write_addr < self.MAX_SAMPLES)
-                & ~record_toggle_evt
-                & ~playback_evt
+            do_record_input.eq(
+                sample_accepted & recording & ~record_toggle_evt & ~playback_evt
             ),
+            do_capture_strobe.eq(do_record_input & (decim_acc >= 7)),
+            do_write.eq(do_capture_strobe & (write_addr < self.MAX_CAPTURE_SAMPLES)),
             wr.en.eq(do_write),
             wr.addr.eq(write_addr),
             wr.data.eq(sample_q8),
@@ -118,14 +129,15 @@ class PaulaRecorderCore(wiring.Component):
                 & ~record_toggle_evt
                 & ~playback_evt
             ),
-            do_play_emit.eq(
+            do_play_tick.eq(
                 sample_accepted
                 & (play_state == self.PlayState.PLAY)
                 & ~record_toggle_evt
                 & ~playback_evt
             ),
+            do_play_advance.eq(do_play_tick & (play_acc >= 7)),
             play_last.eq((play_count + 1) >= valid_length),
-            do_read.eq(do_prefetch | (do_play_emit & ~play_last)),
+            do_read.eq(do_prefetch | (do_play_advance & ~play_last)),
             rd.en.eq(do_read),
             rd.addr.eq(play_addr),
         ]
@@ -138,9 +150,11 @@ class PaulaRecorderCore(wiring.Component):
                     recording.eq(1),
                     write_addr.eq(0),
                     valid_length.eq(0),
+                    decim_acc.eq(0),
                     play_state.eq(self.PlayState.IDLE),
                     play_addr.eq(0),
                     play_count.eq(0),
+                    play_acc.eq(0),
                 ]
         with m.Elif(playback_evt):
             with m.If(valid_length != 0):
@@ -149,14 +163,21 @@ class PaulaRecorderCore(wiring.Component):
                     play_state.eq(self.PlayState.PREFETCH),
                     play_addr.eq(0),
                     play_count.eq(0),
+                    play_acc.eq(0),
                 ]
+
+        with m.If(do_record_input):
+            with m.If(do_capture_strobe):
+                m.d.sync += decim_acc.eq(decim_acc - 7)
+            with m.Else():
+                m.d.sync += decim_acc.eq(decim_acc + self.CAPTURE_NUM)
 
         with m.If(do_write):
             m.d.sync += [
                 write_addr.eq(write_addr + 1),
                 valid_length.eq(write_addr + 1),
             ]
-            with m.If((write_addr + 1) >= self.MAX_SAMPLES):
+            with m.If((write_addr + 1) >= self.MAX_CAPTURE_SAMPLES):
                 m.d.sync += recording.eq(0)
 
         with m.If(do_prefetch):
@@ -165,16 +186,23 @@ class PaulaRecorderCore(wiring.Component):
                 play_addr.eq(play_addr + 1),
             ]
 
-        with m.If(do_play_emit):
-            m.d.sync += play_count.eq(play_count + 1)
-            with m.If(play_last):
-                m.d.sync += [
-                    play_state.eq(self.PlayState.IDLE),
-                    play_addr.eq(0),
-                    play_count.eq(0),
-                ]
+        with m.If(do_play_tick):
+            with m.If(do_play_advance):
+                m.d.sync += play_acc.eq(play_acc - 7)
+                with m.If(play_last):
+                    m.d.sync += [
+                        play_state.eq(self.PlayState.IDLE),
+                        play_addr.eq(0),
+                        play_count.eq(0),
+                        play_acc.eq(0),
+                    ]
+                with m.Else():
+                    m.d.sync += [
+                        play_count.eq(play_count + 1),
+                        play_addr.eq(play_addr + 1),
+                    ]
             with m.Else():
-                m.d.sync += play_addr.eq(play_addr + 1)
+                m.d.sync += play_acc.eq(play_acc + self.CAPTURE_NUM)
 
         return m
 

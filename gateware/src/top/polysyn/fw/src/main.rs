@@ -30,7 +30,7 @@ use tiliqua_hal::embedded_graphics::prelude::*;
 
 use opts::persistence::*;
 use hal::pca9635::Pca9635Driver;
-use hal::tusb322::{TUSB322Driver, TUSB322Mode, AttachedState};
+use hal::tusb322::{TUSB322Driver, TUSB322Mode, AttachedState, AccessoryType};
 
 use tiliqua_fw::wavetable;
 
@@ -124,6 +124,8 @@ fn timer0_handler(app: &Mutex<RefCell<App>>) {
         app.synth.set_matrix_coefficient(1, 5, coeff_wet);
         app.synth.set_matrix_coefficient(2, 6, coeff_wet);
         app.synth.set_matrix_coefficient(3, 7, coeff_wet);
+
+        app.synth.set_midi_channel_filter(opts.misc.midi_ch.value.to_filter());
 
         // ADSR params
         app.synth.set_attack_rate(adsr_ui_to_rate(opts.adsr.attack.value));
@@ -250,12 +252,14 @@ impl App {
         let pmod = EurorackPmod0::new(peripherals.PMOD0_PERIPH);
         let i2cdev = I2c0::new(peripherals.I2C0);
         let pca9635 = Pca9635Driver::new(i2cdev);
-        let synth = Polysynth0::new(peripherals.SYNTH_PERIPH);
         let drive_smoother = OnePoleSmoother::new(0.05f32);
         let reso_smoother = OnePoleSmoother::new(0.05f32);
         let diffusion_smoother = OnePoleSmoother::new(0.05f32);
         let touch_controller = MidiTouchController::new();
         let cc_mapper = build_cc_mapper(&opts);
+        let mut synth = Polysynth0::new(peripherals.SYNTH_PERIPH);
+        synth.usb_host_midi(1, 1);
+        synth.usb_host_vbus(false); // default, but set anyway...
         Self {
             ui: ui::UI::new(opts, TIMER0_ISR_PERIOD_MS,
                             encoder, pca9635, pmod),
@@ -338,7 +342,7 @@ fn main() -> ! {
     let i2cdev = I2c0::new(peripherals.I2C0);
     let mut tusb322 = TUSB322Driver::new(i2cdev);
     tusb322.soft_reset().ok();
-    tusb322.set_mode(TUSB322Mode::Dfp).ok();
+    tusb322.disable_term().ok();
 
     //
     // Create App instance
@@ -364,7 +368,8 @@ fn main() -> ! {
 
         let mut last_jack = pmod.jack();
 
-        let mut usb_cc_attached_as_src = false;
+        let mut last_attached_state = AttachedState::NotAttached;
+        let mut last_opt_host_enabled = false;
 
         loop {
 
@@ -378,22 +383,51 @@ fn main() -> ! {
                 let save_opts = app.ui.opts.misc.save_opts.poll();
                 let wipe_opts = app.ui.opts.misc.wipe_opts.poll();
 
-                // Type-C hotplugging detection
+                // USB Host: Disable DFP terminations if `MISC->usb-host` option is off
                 //
-                // Only enable VBUS if the TUSB322 Type-C controller says we are attached as a source.
-                // This is an extra safeguard against applying VBUS if we're accidentally connecting host<->host.
+                // This stops us supplying VCONN on the CC pins for e-tagged cables, fixing an
+                // edge case where we may backpower VBUS due to the following bug on
+                // early Tiliqua R5.1s: https://github.com/apfaudio/tiliqua-hardware/issues/1
                 //
 
-                if let Ok(status) = tusb322.read_connection_status_control() {
-                    // Only update on valid reads to reduce risk of unintended toggling mid-stream
-                    let new_state = status.attached_state == AttachedState::AttachedSrc;
-                    if new_state != usb_cc_attached_as_src {
-                        info!("USB CC hotplug: {:?}", status);
-                        usb_cc_attached_as_src = new_state;
+                let opt_host_enabled = app.ui.opts.misc.usb_host.value == UsbHost::On;
+                if last_opt_host_enabled != opt_host_enabled {
+                    if opt_host_enabled {
+                        tusb322.soft_reset().ok();
+                        tusb322.set_mode(TUSB322Mode::Dfp).ok();
+                    } else {
+                        tusb322.disable_term().ok();
+                        app.synth.usb_host_vbus(false);
                     }
                 }
-                let usb_vbus_enabled = usb_cc_attached_as_src && (app.ui.opts.misc.usb_host.value == UsbHost::On);
-                app.synth.usb_midi_host(usb_vbus_enabled, 1, 1);
+                last_opt_host_enabled = opt_host_enabled;
+
+                // Type-C hotplugging detection
+                //
+                // Only enable VBUS if the TUSB322 Type-C controller says we are attached as:
+                // - Attached.SRC
+                // - Attached.ACCESSORY && AccessoryType.DebugDfp
+                //
+                // Due to the same hardware bug as above, Tiliqua's host port in DFP mode may
+                // have the TUSB322I see some rare adapter combinations as `DebugDfp` accessories,
+                // rather than `Attached.SRC`. To work around this, we still power VBUS on `DebugDfp`.
+                //
+
+                if let Ok(ctrl) = tusb322.read_connection_status_control() {
+                    if let Ok(conn) = tusb322.read_connection_status() {
+                        // Only update on valid reads to reduce risk of unintended toggling mid-stream
+                        if ctrl.attached_state != last_attached_state {
+                            info!("USB CC hotplug: {:?} | {:?}", ctrl, conn);
+                            last_attached_state = ctrl.attached_state;
+                        }
+                        // Check how we are attached
+                        let attached_src = ctrl.attached_state == AttachedState::AttachedSrc;
+                        let attached_debug_dfp =
+                            (ctrl.attached_state == AttachedState::AttachedAccessory) &&
+                            (conn.accessory == AccessoryType::DebugDfp);
+                        app.synth.usb_host_vbus(opt_host_enabled && (attached_src || attached_debug_dfp));
+                    }
+                }
 
                 //
                 // Copy out all the bits of state we need for drawing

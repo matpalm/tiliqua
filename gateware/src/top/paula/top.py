@@ -77,29 +77,49 @@ class PaulaTop(Elaboratable):
         m.submodules.paudio = paudio = PaulaAudioWrapper()
         m.submodules.sample0 = sample0 = Sample()
 
+        # state of register programming progress
         config_state = Signal(unsigned(3), init=0)
+        # paula register address and data buses
         reg_addr = Signal(unsigned(8), init=0)
         reg_data = Signal(unsigned(16), init=0)
+        # keep paula reset for initial cycles
         reset_ctr = Signal(range(64), init=63)
+        # paula reset signal
         pa_rst = Signal()
 
+        # sync clock down to 7 MHz.
         clk7_div = Signal(range(8), init=0)
+        # one-cycle pulse for 7 MHz paula timing
         clk7_en_pulse = Signal(init=0)
+        # divider for horizontal strobe timing
         strhor_div = Signal(range(480), init=0)
+        # one-cycle horizontal strobe pulse
         strhor_pulse = Signal(init=0)
+        # spacing between register writes
         write_hold = Signal(range(2), init=0)
+        # num startup AUD0DAT prime writes to do
         dma_prime_writes = Signal(range(8), init=0)
 
+        # Audio sample-rate handshake pulse.
         sample_tick = Signal()
+        # Pulse to toggle sample record state.
         rec_evt = Signal()
+        # Pulse to trigger/toggle sample playback.
         play_evt = Signal()
+        # Incoming audio sample from PMOD channel 0.
         in0_sample = Signal(signed(ASQ.as_shape().width))
-        sample_shift = max(ASQ.as_shape().width - 8, 0)
+        # Incoming sample converted to signed 8-bit.
         in0_s8 = Signal(signed(8))
+        # Stored sample output converted to signed 8-bit.
         sample0_s8 = Signal(signed(8))
-        # in0_direct = Signal(signed(ASQ.as_shape().width))
+        # Packed 16-bit Paula sample word.
         sample_word = Signal(unsigned(16))
+        # Paula left-channel output sample.
         pa_l = Signal(signed(15))
+
+        # ASQ -> paula for inbound
+        sample_shift = max(ASQ.as_shape().width - 8, 0)
+        # paula -> ASQ for outbound
         out_shift = max(ASQ.as_shape().width - 15, 0)
         # direct_shift = max(ASQ.as_shape().width - 8, 0)
 

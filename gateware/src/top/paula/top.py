@@ -9,6 +9,7 @@ from tiliqua.dsp import ASQ
 from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
 
+from fake_agnus import FakeAgnus
 from paula_audio_wrapper import PaulaAudioWrapper
 
 class PaulaTop(Elaboratable):
@@ -16,7 +17,7 @@ class PaulaTop(Elaboratable):
     SAMPLE_COUNT = 256
     PAULA_PERIOD = 124
     BYPASS_PAULA_AUDIO = False
-    USE_DMA_MODE = False
+    USE_FAKE_AGNUS_DMA = True
 
     AUD0LEN = 0x52
     AUD0PER = 0x53
@@ -24,7 +25,7 @@ class PaulaTop(Elaboratable):
     AUD0DAT = 0x55
 
     bitstream_help = BitstreamHelp(
-        brief="Paula live in0-source bring-up",
+        brief="Paula live in0-source bring-up (optional Fake Agnus DMA mode)",
         io_left=[
             "sample0 in",
             "sample1 in",
@@ -59,6 +60,7 @@ class PaulaTop(Elaboratable):
         # Keep codec forced unmuted during Paula bring-up.
         m.d.comb += pmod0.codec_mute.eq(0)
 
+        m.submodules.fake_agnus = fake_agnus = FakeAgnus()
         m.submodules.paudio = paudio = PaulaAudioWrapper()
 
         config_state = Signal(unsigned(3), init=0)
@@ -73,6 +75,7 @@ class PaulaTop(Elaboratable):
         strhor_div = Signal(range(480), init=0)
         strhor_pulse = Signal(init=0)
         write_hold = Signal(range(2), init=0)
+        dma_prime_writes = Signal(range(8), init=0)
 
         sample_tick = Signal()
         in0_sample = Signal(signed(ASQ.as_shape().width))
@@ -109,9 +112,21 @@ class PaulaTop(Elaboratable):
             paudio.reg_address_in.eq(reg_addr),
             paudio.data_in.eq(reg_data),
             paudio.dmaena.eq(
-                Mux(pa_rst, C(0, 4), Mux(self.USE_DMA_MODE, C(0b0001, 4), C(0, 4)))
+                Mux(
+                    pa_rst,
+                    C(0, 4),
+                    Mux(self.USE_FAKE_AGNUS_DMA, C(0b0001, 4), C(0, 4)),
+                )
             ),
             paudio.audpen.eq(0),
+            fake_agnus.i_audio_dmal.eq(Cat(paudio.dmal[0], C(0, 1))),
+            fake_agnus.i_audio_dmas.eq(Cat(paudio.dmas[0], C(0, 1))),
+            fake_agnus.i_sample_tick.eq(sample_tick),
+            fake_agnus.i_sample0_word.eq(sample_word),
+            fake_agnus.i_sample1_word.eq(0),
+            fake_agnus.i_reg_write.eq(reg_addr != 0),
+            fake_agnus.i_reg_addr.eq(reg_addr),
+            fake_agnus.i_reg_data.eq(reg_data),
         ]
 
         m.d.sync += dbg_phase.eq(dbg_phase + 15000)
@@ -173,15 +188,31 @@ class PaulaTop(Elaboratable):
                             reg_data.eq(self.SAMPLE_COUNT),
                             config_state.eq(4),
                             write_hold.eq(1),
+                            dma_prime_writes.eq(Mux(self.USE_FAKE_AGNUS_DMA, 4, 0)),
                         ]
                     with m.Case(4):
-                        # Stream live in0-derived waveform continuously (CPU mode).
+                        # Stream live in0-derived waveform (CPU mode) or buffered Fake Agnus DMA data.
                         with m.If(~pa_rst):
-                            m.d.sync += [
-                                reg_addr.eq(self.AUD0DAT),
-                                reg_data.eq(sample_word),
-                                write_hold.eq(1),
-                            ]
+                            with m.If(self.USE_FAKE_AGNUS_DMA):
+                                with m.If(dma_prime_writes != 0):
+                                    m.d.sync += [
+                                        reg_addr.eq(self.AUD0DAT),
+                                        reg_data.eq(fake_agnus.o_audio_data0),
+                                        write_hold.eq(1),
+                                        dma_prime_writes.eq(dma_prime_writes - 1),
+                                    ]
+                                with m.Else():
+                                    m.d.sync += [
+                                        reg_addr.eq(self.AUD0DAT),
+                                        reg_data.eq(fake_agnus.o_audio_data0),
+                                        write_hold.eq(1),
+                                    ]
+                            with m.Else():
+                                m.d.sync += [
+                                    reg_addr.eq(self.AUD0DAT),
+                                    reg_data.eq(sample_word),
+                                    write_hold.eq(1),
+                                ]
 
         return m
 

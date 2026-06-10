@@ -12,7 +12,7 @@ from sample import Sample
 class PaulaInstance(wiring.Component):
     """Paula-side owner for sample channels and register-backed control."""
 
-    USE_FAKE_AGNUS_DMA = True
+    # USE_FAKE_AGNUS_DMA = True
 
     i_sample0: In(ASQ)
     i_sample1: In(ASQ)
@@ -139,6 +139,9 @@ class PaulaInstance(wiring.Component):
             # Fake Agnus observes Paula's DMA/restart requests for future handoff.
             fake_agnus.i_audio_dmal.eq(Cat(paudio.dmal[0], paudio.dmal[1])),
             fake_agnus.i_audio_dmas.eq(Cat(paudio.dmas[0], paudio.dmas[1])),
+            fake_agnus.i_sample_tick.eq(self.sample_tick),
+            fake_agnus.i_sample0_word.eq(sample0_word),
+            fake_agnus.i_sample1_word.eq(sample1_word),
             fake_agnus.i_reg_write.eq(reg_addr != 0),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
@@ -244,17 +247,17 @@ class PaulaInstance(wiring.Component):
                             ]
                 with m.Else():
                     with m.If(self.USE_FAKE_AGNUS_DMA):
-                        # In DMA mode, only provide AUDxDAT when Fake Agnus grants Paula requests.
+                        # In DMA mode, provide buffered words from Fake Agnus on DMA grants.
                         with m.If(fake_agnus.o_audio_grant[0]):
                             m.d.sync += [
                                 reg_addr.eq(AUD0DAT),
-                                reg_data.eq(sample0_word),
+                                reg_data.eq(fake_agnus.o_audio_data0),
                                 write_hold.eq(1),
                             ]
                         with m.Elif(fake_agnus.o_audio_grant[1]):
                             m.d.sync += [
                                 reg_addr.eq(AUD1DAT),
-                                reg_data.eq(sample1_word),
+                                reg_data.eq(fake_agnus.o_audio_data1),
                                 write_hold.eq(1),
                             ]
                     with m.Else():

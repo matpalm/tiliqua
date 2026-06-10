@@ -2,6 +2,7 @@
 
 from amaranth import *
 from amaranth.lib import cdc, wiring
+from amaranth.lib.memory import Memory
 
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
@@ -14,7 +15,7 @@ from paula_audio_wrapper import PaulaAudioWrapper
 
 class PaulaTop(Elaboratable):
 
-    SAMPLE_COUNT = 256
+    SAMPLE_COUNT = 2048
     PAULA_PERIOD = 124
     USE_FAKE_AGNUS_DMA = True
 
@@ -24,7 +25,7 @@ class PaulaTop(Elaboratable):
     AUD0DAT = 0x55
 
     bitstream_help = BitstreamHelp(
-        brief="Paula live in0-source bring-up (optional Fake Agnus DMA mode)",
+        brief="Paula capture/freeze loop (Fake Agnus DMA optional)",
         io_left=[
             "sample0 in",
             "sample1 in",
@@ -67,6 +68,16 @@ class PaulaTop(Elaboratable):
         reg_data = Signal(unsigned(16), init=0)
         reset_ctr = Signal(range(64), init=63)
         pa_rst = Signal()
+        record_en = Signal(init=1)
+        btn_prev = Signal(init=0)
+
+        m.submodules.sample_mem = sample_mem = Memory(
+            shape=signed(8), depth=self.SAMPLE_COUNT, init=[]
+        )
+        wr = sample_mem.write_port()
+        rd = sample_mem.read_port()
+        wr_ptr = Signal(range(self.SAMPLE_COUNT), init=0)
+        rd_ptr = Signal(range(self.SAMPLE_COUNT), init=0)
 
         # Paula timing strobes in sync domain.
         clk7_div = Signal(range(8), init=0)
@@ -81,6 +92,7 @@ class PaulaTop(Elaboratable):
         sample_shift = max(ASQ.as_shape().width - 8, 0)
         in0_s8 = Signal(signed(8))
         in0_direct = Signal(signed(ASQ.as_shape().width))
+        loop_s8 = Signal(signed(8))
         sample_word = Signal(unsigned(16))
         pa_l = Signal(signed(15))
         out_shift = max(ASQ.as_shape().width - 15, 0)
@@ -92,7 +104,8 @@ class PaulaTop(Elaboratable):
             sample_tick.eq(pmod0.o_cal.valid),
             in0_sample.eq(pmod0.o_cal.payload[0].as_value()),
             in0_s8.eq(in0_sample >> sample_shift),
-            sample_word.eq(Cat(in0_s8.as_unsigned(), in0_s8.as_unsigned())),
+            loop_s8.eq(rd.data),
+            sample_word.eq(Cat(loop_s8.as_unsigned(), loop_s8.as_unsigned())),
             in0_direct.eq(in0_s8 << direct_shift),
             pa_l.eq(paudio.ldata.as_signed()),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
@@ -122,7 +135,29 @@ class PaulaTop(Elaboratable):
             fake_agnus.i_reg_write.eq(reg_addr != 0),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
+            wr.en.eq(sample_tick & record_en),
+            wr.addr.eq(wr_ptr),
+            wr.data.eq(in0_s8),
+            rd.en.eq(1),
+            rd.addr.eq(rd_ptr),
         ]
+
+        with m.If(sample_tick):
+            with m.If(wr_ptr == (self.SAMPLE_COUNT - 1)):
+                m.d.sync += wr_ptr.eq(0)
+            with m.Else():
+                m.d.sync += wr_ptr.eq(wr_ptr + 1)
+
+            with m.If(rd_ptr == (self.SAMPLE_COUNT - 1)):
+                m.d.sync += rd_ptr.eq(0)
+            with m.Else():
+                m.d.sync += rd_ptr.eq(rd_ptr + 1)
+
+        # Press encoder button to toggle record/freeze mode.
+        with m.If(btn_prev == 0):
+            with m.If(reboot.button):
+                m.d.sync += record_en.eq(~record_en)
+        m.d.sync += btn_prev.eq(reboot.button)
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)

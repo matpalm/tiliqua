@@ -6,8 +6,11 @@ from math import gcd
 
 from tiliqua.dsp import ASQ
 from dither import Dither8BitQuantiser
+from led_low_pass import LedLowPass
 
 class Sample(wiring.Component):
+
+    # TODO: fix bug where zero crossing isn't checked when we hit max sample length
 
     class PlayState(enum.Enum, shape=unsigned(2)):
         IDLE = 0
@@ -22,6 +25,8 @@ class Sample(wiring.Component):
     CAPTURE_DENOM = INPUT_FREQ // _FREQ_GCD
     CAPTURE_EDGE = CAPTURE_DENOM - CAPTURE_NUM
     MAX_CAPTURE_SAMPLES = RECORD_SECONDS * CAPTURE_FREQ
+    GAIN_MAX = 255
+    GAIN_STEP = 8  # 32-sample fade at 48 kHz (approx)
 
     i_sample: In(ASQ)
     sample_tick: In(1)
@@ -41,6 +46,7 @@ class Sample(wiring.Component):
         recording = Signal(init=0)
         pending_record_start = Signal(init=0)
         pending_record_stop = Signal(init=0)
+        pending_play_stop = Signal(init=0)
         valid_length = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
         write_addr = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
 
@@ -51,8 +57,17 @@ class Sample(wiring.Component):
         decim_acc = Signal(range(self.CAPTURE_DENOM), init=0)
 
         m.submodules.dither = dither = Dither8BitQuantiser()
+        m.submodules.led_lp = led_lp = LedLowPass()
 
         sample_in = Signal(signed(dither.INPUT_WIDTH))
+        raw_out = Signal(signed(dither.INPUT_WIDTH))
+        gain = Signal(unsigned(8), init=0)
+        scaled_mul = Signal(signed(dither.INPUT_WIDTH + 8))
+        scaled_out = Signal(signed(dither.INPUT_WIDTH))
+        play_sample = Signal(signed(dither.INPUT_WIDTH))
+        last_play_sample = Signal(signed(dither.INPUT_WIDTH), init=0)
+        play_positive_zero_cross = Signal()
+        last_played_sample = Signal(signed(dither.INPUT_WIDTH), init=0)
         last_sample = Signal(signed(dither.INPUT_WIDTH), init=0)
         positive_zero_cross = Signal()
 
@@ -66,17 +81,32 @@ class Sample(wiring.Component):
         do_read = Signal()
 
         m.d.comb += [
-            self.o_sample.eq(0),
+            raw_out.eq(0),
             sample_in.eq(self.i_sample.as_value()),
+            play_sample.eq(rd.data << dither.TRUNC_SHIFT),
+            scaled_mul.eq(raw_out * gain),
+            scaled_out.eq(scaled_mul >> 8),
+            led_lp.i_sample.eq(scaled_out),
+            led_lp.tick.eq(self.sample_tick),
+            self.o_sample.as_value().eq(led_lp.o_sample),
             dither.i_sample.eq(sample_in),
             dither.tick.eq(self.sample_tick),
             positive_zero_cross.eq(
                 self.sample_tick & (last_sample <= 0) & (sample_in > 0)
             ),
+            play_positive_zero_cross.eq(
+                self.sample_tick
+                & (play_state == self.PlayState.PLAY)
+                & (last_play_sample <= 0)
+                & (play_sample > 0)
+            ),
         ]
 
         with m.If(play_state == self.PlayState.PLAY):
-            m.d.comb += self.o_sample.as_value().eq(rd.data << dither.TRUNC_SHIFT)
+            m.d.comb += raw_out.eq(play_sample)
+        with m.Elif(play_state == self.PlayState.PREFETCH):
+            # Hold last sample through prefetch to avoid a one-sample zero bubble.
+            m.d.comb += raw_out.eq(last_played_sample)
 
         m.d.comb += [
             do_record_input.eq(
@@ -123,23 +153,20 @@ class Sample(wiring.Component):
                     pending_record_stop.eq(0),
                 ]
         with m.Elif(self.playback_evt):
-            # Toggle playback: if active, stop; if idle and data exists, start.
+            # Toggle playback: stop is deferred to playback zero crossing.
             with m.If(play_state != self.PlayState.IDLE):
-                m.d.sync += [
-                    play_state.eq(self.PlayState.IDLE),
-                    play_addr.eq(0),
-                    play_count.eq(0),
-                    play_acc.eq(0),
-                ]
+                m.d.sync += pending_play_stop.eq(1)
             with m.Elif(valid_length != 0):
                 m.d.sync += [
                     recording.eq(0),
                     pending_record_start.eq(0),
                     pending_record_stop.eq(0),
+                    pending_play_stop.eq(0),
                     play_state.eq(self.PlayState.PREFETCH),
                     play_addr.eq(0),
                     play_count.eq(0),
                     play_acc.eq(0),
+                    last_played_sample.eq(0),
                 ]
 
         with m.If(positive_zero_cross):
@@ -161,8 +188,34 @@ class Sample(wiring.Component):
                     play_acc.eq(0),
                 ]
 
+        with m.If(play_positive_zero_cross & pending_play_stop):
+            m.d.sync += [
+                pending_play_stop.eq(0),
+                play_state.eq(self.PlayState.IDLE),
+                play_addr.eq(0),
+                play_count.eq(0),
+                play_acc.eq(0),
+                last_played_sample.eq(0),
+            ]
+
         with m.If(self.sample_tick):
-            m.d.sync += last_sample.eq(sample_in)
+            m.d.sync += [
+                last_sample.eq(sample_in),
+                last_play_sample.eq(play_sample),
+            ]
+            with m.If(play_state == self.PlayState.PLAY):
+                m.d.sync += last_played_sample.eq(play_sample)
+
+            with m.If((play_state != self.PlayState.IDLE) & ~pending_play_stop):
+                with m.If(gain <= (self.GAIN_MAX - self.GAIN_STEP)):
+                    m.d.sync += gain.eq(gain + self.GAIN_STEP)
+                with m.Else():
+                    m.d.sync += gain.eq(self.GAIN_MAX)
+            with m.Else():
+                with m.If(gain >= self.GAIN_STEP):
+                    m.d.sync += gain.eq(gain - self.GAIN_STEP)
+                with m.Else():
+                    m.d.sync += gain.eq(0)
 
         with m.If(do_record_input):
             with m.If(do_capture_strobe):

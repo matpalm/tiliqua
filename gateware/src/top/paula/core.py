@@ -7,7 +7,6 @@ from pathlib import Path
 from tiliqua import midi
 from tiliqua.dsp import ASQ
 
-from led_low_pass import LedLowPass
 from sample import Sample
 
 class PaulaRecorderCore(wiring.Component):
@@ -68,7 +67,6 @@ class PaulaRecorderCore(wiring.Component):
 
         m.submodules.sample0 = sample0 = Sample()
         m.submodules.sample1 = sample1 = Sample()
-        m.submodules.led_lp = led_lp = LedLowPass()
 
         m.d.comb += [
             sample0.i_sample.eq(self.i.payload[0]),
@@ -79,11 +77,9 @@ class PaulaRecorderCore(wiring.Component):
             sample1.sample_tick.eq(sample_accepted),
             sample1.record_toggle_evt.eq(rec_evt1),
             sample1.playback_evt.eq(play_evt1),
-            led_lp.i_sample.eq(sample1.o_sample.as_value()),
-            led_lp.tick.eq(sample_accepted),
             self.o.payload[0].eq(sample0.o_sample),
             self.o.payload[1].eq(sample1.o_sample),
-            self.o.payload[2].as_value().eq(led_lp.o_sample),
+            self.o.payload[2].eq(0),
             self.o.payload[3].eq(0),
         ]
 

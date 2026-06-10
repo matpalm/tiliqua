@@ -1,14 +1,13 @@
 from amaranth import *
 
 from tiliqua.dsp import ASQ
-
+from tiliqua.dsp.filters import OnePole
 
 class LedLowPass(Elaboratable):
-    """Approximate the Amiga LED low-pass with two cascaded one-pole stages."""
+    """hacky Amiga LEDish lowpass filter ( as 2 cascaded one-poles )"""
 
     INPUT_WIDTH = ASQ.as_shape().width
-    ALPHA_SHIFT = 15
-    ALPHA = 11469  # ~= 0.35 * 2^15, ~3.3 kHz at 48 kHz
+    SHIFT = 2
 
     def __init__(self):
         self.i_sample = Signal(signed(self.INPUT_WIDTH))
@@ -18,25 +17,19 @@ class LedLowPass(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
-        lp1 = Signal(signed(self.INPUT_WIDTH), init=0)
-        lp2 = Signal(signed(self.INPUT_WIDTH), init=0)
-        err1 = Signal(signed(self.INPUT_WIDTH + 1))
-        err2 = Signal(signed(self.INPUT_WIDTH + 1))
-        delta1 = Signal(signed(self.INPUT_WIDTH + self.ALPHA_SHIFT + 2))
-        delta2 = Signal(signed(self.INPUT_WIDTH + self.ALPHA_SHIFT + 2))
+        m.submodules.pole1 = pole1 = OnePole()
+        m.submodules.pole2 = pole2 = OnePole()
 
         m.d.comb += [
-            err1.eq(self.i_sample - lp1),
-            err2.eq(lp1 - lp2),
-            delta1.eq((err1 * self.ALPHA) >> self.ALPHA_SHIFT),
-            delta2.eq((err2 * self.ALPHA) >> self.ALPHA_SHIFT),
-            self.o_sample.eq(lp2),
+            pole1.i.valid.eq(self.tick),
+            pole1.i.payload.eq(self.i_sample),
+            pole1.shift.eq(self.SHIFT),
+            pole1.o.ready.eq(pole2.i.ready),
+            pole2.i.valid.eq(pole1.o.valid),
+            pole2.i.payload.eq(pole1.o.payload),
+            pole2.shift.eq(self.SHIFT),
+            pole2.o.ready.eq(1),
+            self.o_sample.eq(pole2.o.payload),
         ]
-
-        with m.If(self.tick):
-            m.d.sync += [
-                lp1.eq(lp1 + delta1),
-                lp2.eq(lp2 + delta2),
-            ]
 
         return m

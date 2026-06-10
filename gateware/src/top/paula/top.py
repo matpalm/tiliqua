@@ -20,7 +20,6 @@ from sample import Sample
 class PaulaTop(Elaboratable):
 
     PAULA_PERIOD = 124
-    USE_FAKE_AGNUS_DMA = True
 
     AUD0LEN = 0x52
     AUD0PER = 0x53
@@ -98,11 +97,11 @@ class PaulaTop(Elaboratable):
         sample_shift = max(ASQ.as_shape().width - 8, 0)
         in0_s8 = Signal(signed(8))
         sample0_s8 = Signal(signed(8))
-        in0_direct = Signal(signed(ASQ.as_shape().width))
+        # in0_direct = Signal(signed(ASQ.as_shape().width))
         sample_word = Signal(unsigned(16))
         pa_l = Signal(signed(15))
         out_shift = max(ASQ.as_shape().width - 15, 0)
-        direct_shift = max(ASQ.as_shape().width - 8, 0)
+        # direct_shift = max(ASQ.as_shape().width - 8, 0)
 
         m.d.comb += [
             pmod0.o_cal.ready.eq(1),
@@ -112,10 +111,10 @@ class PaulaTop(Elaboratable):
             in0_s8.eq(in0_sample >> sample_shift),
             sample0_s8.eq(sample0.o_sample.as_value() >> sample_shift),
             sample_word.eq(Cat(sample0_s8.as_unsigned(), sample0_s8.as_unsigned())),
-            in0_direct.eq(in0_s8 << direct_shift),
+            # in0_direct.eq(in0_s8 << direct_shift),
             pa_l.eq(paudio.ldata.as_signed()),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
-            pmod0.i_cal.payload[1].as_value().eq(in0_direct),
+            pmod0.i_cal.payload[1].eq(0),
             pmod0.i_cal.payload[2].eq(0),
             pmod0.i_cal.payload[3].eq(0),
             paudio.clk7_en.eq(clk7_en_pulse),
@@ -129,7 +128,7 @@ class PaulaTop(Elaboratable):
                 Mux(
                     pa_rst,
                     C(0, 4),
-                    Mux(self.USE_FAKE_AGNUS_DMA, C(0b0001, 4), C(0, 4)),
+                    C(0b0001, 4),
                 )
             ),
             paudio.audpen.eq(0),
@@ -217,28 +216,21 @@ class PaulaTop(Elaboratable):
                             reg_data.eq(Sample.MAX_CAPTURE_SAMPLES),
                             config_state.eq(4),
                             write_hold.eq(1),
-                            dma_prime_writes.eq(Mux(self.USE_FAKE_AGNUS_DMA, 4, 0)),
+                            dma_prime_writes.eq(4),
                         ]
                     with m.Case(4):
                         with m.If(~pa_rst):
-                            with m.If(self.USE_FAKE_AGNUS_DMA):
-                                with m.If(dma_prime_writes != 0):
-                                    m.d.sync += [
-                                        reg_addr.eq(self.AUD0DAT),
-                                        reg_data.eq(fake_agnus.o_audio_data0),
-                                        write_hold.eq(1),
-                                        dma_prime_writes.eq(dma_prime_writes - 1),
-                                    ]
-                                with m.Else():
-                                    m.d.sync += [
-                                        reg_addr.eq(self.AUD0DAT),
-                                        reg_data.eq(fake_agnus.o_audio_data0),
-                                        write_hold.eq(1),
-                                    ]
+                            with m.If(dma_prime_writes != 0):
+                                m.d.sync += [
+                                    reg_addr.eq(self.AUD0DAT),
+                                    reg_data.eq(fake_agnus.o_audio_data0),
+                                    write_hold.eq(1),
+                                    dma_prime_writes.eq(dma_prime_writes - 1),
+                                ]
                             with m.Else():
                                 m.d.sync += [
                                     reg_addr.eq(self.AUD0DAT),
-                                    reg_data.eq(sample_word),
+                                    reg_data.eq(fake_agnus.o_audio_data0),
                                     write_hold.eq(1),
                                 ]
 

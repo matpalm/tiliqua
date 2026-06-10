@@ -6,7 +6,6 @@ from pathlib import Path
 from amaranth import *
 from amaranth.lib import wiring
 
-from tiliqua import midi
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ
@@ -15,12 +14,15 @@ from tiliqua.platform import RebootProvider
 
 from fake_agnus import FakeAgnus
 from channel import Channel
+from midi import MidiProcessing
 from paula_audio_wrapper import PaulaAudioWrapper
 from sample import Sample
 
 class PaulaTop(Elaboratable):
 
     PAULA_PERIOD = 124
+
+    # TODO: if going to 3 channels, move these register defns in channel.py
 
     AUD0LEN = 0x52
     AUD0PER = 0x53
@@ -63,12 +65,7 @@ class PaulaTop(Elaboratable):
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
 
-        midi_pins = platform.request("midi")
-        m.submodules.serialrx = serialrx = midi.SerialRx(
-            system_clk_hz=60e6, pins=midi_pins
-        )
-        m.submodules.midi_decode = midi_decode = midi.MidiDecodeSerial()
-        wiring.connect(m, serialrx.o, midi_decode.i)
+        m.submodules.midi_proc = midi_proc = MidiProcessing(midi_channel=midi_channel)
 
         m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
         m.submodules.pmod0 = pmod0 = eurorack_pmod.EurorackPmod(
@@ -118,8 +115,6 @@ class PaulaTop(Elaboratable):
 
         # Audio rate handshake pulse.
         sample_tick = Signal()
-        note_on_evt = Signal()
-        note_on_note = Signal(unsigned(8))
 
         # paula left-channel output sample.
         pa_l = Signal(signed(15))
@@ -134,21 +129,20 @@ class PaulaTop(Elaboratable):
             pmod0.o_cal.ready.eq(1),
             pmod0.i_cal.valid.eq(1),
             sample_tick.eq(pmod0.o_cal.valid),
-            note_on_evt.eq(0),
-            note_on_note.eq(0),
             pa_l.eq(paudio.ldata.as_signed()),
             pa_r.eq(paudio.rdata.as_signed()),
+            pa_rst.eq(reset_ctr != 0),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
             pmod0.i_cal.payload[1].as_value().eq(pa_r << out_shift),
             pmod0.i_cal.payload[2].eq(0),
             pmod0.i_cal.payload[3].eq(0),
             paudio.clk7_en.eq(clk7_en_pulse),
             paudio.cck.eq(clk7_en_pulse),
-            pa_rst.eq(reset_ctr != 0),
             paudio.rst.eq(pa_rst),
             paudio.strhor.eq(strhor_pulse),
             paudio.reg_address_in.eq(reg_addr),
             paudio.data_in.eq(reg_data),
+            # during reset turn off DMA fully, otherwise just have two running
             paudio.dmaena.eq(
                 Mux(
                     pa_rst,
@@ -165,28 +159,15 @@ class PaulaTop(Elaboratable):
             fake_agnus.i_reg_write.eq(reg_addr != 0),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
-            midi_decode.o.ready.eq(1),
         ]
 
         for ch in [0, 1]:
             m.d.comb += [
                 channels[ch].i_sample_tick.eq(sample_tick),
                 channels[ch].i_sample.eq(pmod0.o_cal.payload[ch].as_value()),
-                channels[ch].i_note_on_valid.eq(note_on_evt),
-                channels[ch].i_note.eq(note_on_note),
+                channels[ch].i_note_on_valid.eq(midi_proc.o_note_on_valid),
+                channels[ch].i_note.eq(midi_proc.o_note),
             ]
-
-        with m.If(midi_decode.o.valid):
-            msg = midi_decode.o.payload
-            with m.If(
-                (msg.status.kind == midi.Status.Kind.NOTE_ON)
-                & (msg.status.nibble.channel == midi_channel)
-                & (msg.midi_payload.note_on.velocity != 0)
-            ):
-                m.d.comb += [
-                    note_on_evt.eq(1),
-                    note_on_note.eq(msg.midi_payload.note_on.note),
-                ]
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)

@@ -3,8 +3,9 @@ from amaranth.lib.memory import Memory
 from amaranth.lib import wiring
 from amaranth.lib.wiring import In, Out
 
-
 class FakeAgnus(wiring.Component):
+
+    # TODO: if we go to 3 channel processing let's introduce arrays
 
     BUFFER_DEPTH = 2048
 

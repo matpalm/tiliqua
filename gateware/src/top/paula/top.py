@@ -26,15 +26,15 @@ class PaulaTop(Elaboratable):
 
     # TODO: if going to 3 channels, move these register defns in channel.py
 
-    AUD0LEN = 0x52
-    AUD0PER = 0x53
-    AUD0VOL = 0x54
-    AUD0DAT = 0x55
+    AUD0LEN = 0x52  # CC10
+    AUD0PER = 0x53  # CC74
+    AUD0VOL = 0x54  # CC71
+    AUD0DAT = 0x55  # CC76
 
-    AUD1LEN = 0x5A
-    AUD1PER = 0x5B
-    AUD1VOL = 0x5C
-    AUD1DAT = 0x5D
+    AUD1LEN = 0x5A  # CC77
+    AUD1PER = 0x5B  # CC93
+    AUD1VOL = 0x5C  # CC73
+    AUD1DAT = 0x5D  # CC75
 
     bitstream_help = BitstreamHelp(
         brief="Paula Sample-core loop (MIDI note control)",
@@ -68,12 +68,18 @@ class PaulaTop(Elaboratable):
         self.register_mappings = {
             "AUD0VOL": RegisterMapping(
                 enc_range=(0, 127), reg_range=(0, 64), reg_init=60
-            )
+            ),
+            "AUD1VOL": RegisterMapping(
+                enc_range=(0, 127), reg_range=(0, 64), reg_init=60
+            ),
         }
 
         m.submodules.midi_proc = midi_proc = MidiProcessing(
             midi_channel=midi_cfg["midi_channel"],
-            cc_mapping={74: self.register_mappings["AUD0VOL"]},
+            cc_mapping={
+                71: self.register_mappings["AUD0VOL"],
+                73: self.register_mappings["AUD1VOL"],
+            },
         )
 
         m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
@@ -261,11 +267,19 @@ class PaulaTop(Elaboratable):
                     with m.Case(7):
                         with m.If(~pa_rst):
                             aud0vol = self.register_mappings["AUD0VOL"]
+                            aud1vol = self.register_mappings["AUD1VOL"]
                             with m.If(aud0vol.target != aud0vol.written):
                                 m.d.sync += [
                                     reg_addr.eq(self.AUD0VOL),
                                     reg_data.eq(aud0vol.target),
                                     aud0vol.written.eq(aud0vol.target),
+                                    write_hold.eq(1),
+                                ]
+                            with m.Elif(aud1vol.target != aud1vol.written):
+                                m.d.sync += [
+                                    reg_addr.eq(self.AUD1VOL),
+                                    reg_data.eq(aud1vol.target),
+                                    aud1vol.written.eq(aud1vol.target),
                                     write_hold.eq(1),
                                 ]
                             with m.Else():

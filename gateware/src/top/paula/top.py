@@ -1,4 +1,4 @@
-"""Minimal Paula bring-up with internal triangle source for AUD0DAT."""
+"""Minimal Paula bring-up with live in0 source for AUD0DAT."""
 
 from amaranth import *
 from amaranth.lib import cdc, wiring
@@ -24,7 +24,7 @@ class PaulaTop(Elaboratable):
     AUD0DAT = 0x55
 
     bitstream_help = BitstreamHelp(
-        brief="Paula triangle-source bring-up",
+        brief="Paula live in0-source bring-up",
         io_left=[
             "sample0 in",
             "sample1 in",
@@ -75,8 +75,9 @@ class PaulaTop(Elaboratable):
         write_hold = Signal(range(2), init=0)
 
         sample_tick = Signal()
-        tri_s8 = Signal(signed(8), init=0)
-        tri_dir_up = Signal(init=1)
+        in0_sample = Signal(signed(ASQ.as_shape().width))
+        sample_shift = max(ASQ.as_shape().width - 8, 0)
+        in0_s8 = Signal(signed(8))
         tri_direct = Signal(signed(ASQ.as_shape().width))
         sample_word = Signal(unsigned(16))
         pa_l = Signal(signed(15))
@@ -89,8 +90,10 @@ class PaulaTop(Elaboratable):
             pmod0.o_cal.ready.eq(1),
             pmod0.i_cal.valid.eq(1),
             sample_tick.eq(pmod0.o_cal.valid),
-            sample_word.eq(Cat(tri_s8.as_unsigned(), tri_s8.as_unsigned())),
-            tri_direct.eq(tri_s8 << direct_shift),
+            in0_sample.eq(pmod0.o_cal.payload[0].as_value()),
+            in0_s8.eq(in0_sample >> sample_shift),
+            sample_word.eq(Cat(in0_s8.as_unsigned(), in0_s8.as_unsigned())),
+            tri_direct.eq(in0_s8 << direct_shift),
             pa_l.eq(paudio.ldata.as_signed()),
             pmod0.i_cal.payload[0]
             .as_value()
@@ -113,24 +116,6 @@ class PaulaTop(Elaboratable):
 
         m.d.sync += dbg_phase.eq(dbg_phase + 15000)
         m.d.comb += dbg_tone.eq(Mux(dbg_phase[-1], 12000, -12000))
-
-        with m.If(sample_tick):
-            with m.If(tri_dir_up):
-                with m.If(tri_s8 == 127):
-                    m.d.sync += [
-                        tri_s8.eq(126),
-                        tri_dir_up.eq(0),
-                    ]
-                with m.Else():
-                    m.d.sync += tri_s8.eq(tri_s8 + 1)
-            with m.Else():
-                with m.If(tri_s8 == -128):
-                    m.d.sync += [
-                        tri_s8.eq(-127),
-                        tri_dir_up.eq(1),
-                    ]
-                with m.Else():
-                    m.d.sync += tri_s8.eq(tri_s8 - 1)
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)
@@ -190,7 +175,7 @@ class PaulaTop(Elaboratable):
                             write_hold.eq(1),
                         ]
                     with m.Case(4):
-                        # Stream internal triangle waveform continuously (CPU mode).
+                        # Stream live in0-derived waveform continuously (CPU mode).
                         with m.If(~pa_rst):
                             m.d.sync += [
                                 reg_addr.eq(self.AUD0DAT),

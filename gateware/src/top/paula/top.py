@@ -59,10 +59,6 @@ class PaulaTop(Elaboratable):
             cfg = json.loads(f.read())
         midi_cfg = cfg["samples"]["midi"]
         midi_channel = midi_cfg["channel"]
-        record0_note = midi_cfg["slots"][0]["record_note"]
-        play0_note = midi_cfg["slots"][0]["play_note"]
-        record1_note = midi_cfg["slots"][1]["record_note"]
-        play1_note = midi_cfg["slots"][1]["play_note"]
 
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
@@ -83,14 +79,18 @@ class PaulaTop(Elaboratable):
 
         m.submodules.fake_agnus = fake_agnus = FakeAgnus()
         m.submodules.paudio = paudio = PaulaAudioWrapper()
-        m.submodules.channel0 = channel0 = Channel(
-            record_note=record0_note,
-            play_note=play0_note,
-        )
-        m.submodules.channel1 = channel1 = Channel(
-            record_note=record1_note,
-            play_note=play1_note,
-        )
+
+        channels = []
+        for ch in [0, 1]:
+            record_note = midi_cfg["slots"][ch]["record_note"]
+            play_note = midi_cfg["slots"][ch]["play_note"]
+            channels.append(
+                Channel(
+                    record_note=record_note,
+                    play_note=play_note,
+                )
+            )
+        m.submodules += channels
 
         # state of register programming progress
         config_state = Signal(unsigned(4), init=0)
@@ -160,21 +160,21 @@ class PaulaTop(Elaboratable):
             fake_agnus.i_audio_dmal.eq(Cat(paudio.dmal[0], paudio.dmal[1])),
             fake_agnus.i_audio_dmas.eq(Cat(paudio.dmas[0], paudio.dmas[1])),
             fake_agnus.i_sample_tick.eq(sample_tick),
-            fake_agnus.i_sample0_word.eq(channel0.o_sample_word),
-            fake_agnus.i_sample1_word.eq(channel1.o_sample_word),
+            fake_agnus.i_sample0_word.eq(channels[0].o_sample_word),
+            fake_agnus.i_sample1_word.eq(channels[1].o_sample_word),
             fake_agnus.i_reg_write.eq(reg_addr != 0),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
-            channel0.i_sample_tick.eq(sample_tick),
-            channel0.i_sample.eq(pmod0.o_cal.payload[0].as_value()),
-            channel0.i_note_on_valid.eq(note_on_evt),
-            channel0.i_note.eq(note_on_note),
-            channel1.i_sample_tick.eq(sample_tick),
-            channel1.i_sample.eq(pmod0.o_cal.payload[1].as_value()),
-            channel1.i_note_on_valid.eq(note_on_evt),
-            channel1.i_note.eq(note_on_note),
             midi_decode.o.ready.eq(1),
         ]
+
+        for ch in [0, 1]:
+            m.d.comb += [
+                channels[ch].i_sample_tick.eq(sample_tick),
+                channels[ch].i_sample.eq(pmod0.o_cal.payload[ch].as_value()),
+                channels[ch].i_note_on_valid.eq(note_on_evt),
+                channels[ch].i_note.eq(note_on_note),
+            ]
 
         with m.If(midi_decode.o.valid):
             msg = midi_decode.o.payload

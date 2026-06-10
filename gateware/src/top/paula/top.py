@@ -16,7 +16,6 @@ class PaulaTop(Elaboratable):
 
     SAMPLE_COUNT = 256
     PAULA_PERIOD = 124
-    BYPASS_PAULA_AUDIO = False
     USE_FAKE_AGNUS_DMA = True
 
     AUD0LEN = 0x52
@@ -81,13 +80,11 @@ class PaulaTop(Elaboratable):
         in0_sample = Signal(signed(ASQ.as_shape().width))
         sample_shift = max(ASQ.as_shape().width - 8, 0)
         in0_s8 = Signal(signed(8))
-        tri_direct = Signal(signed(ASQ.as_shape().width))
+        in0_direct = Signal(signed(ASQ.as_shape().width))
         sample_word = Signal(unsigned(16))
         pa_l = Signal(signed(15))
         out_shift = max(ASQ.as_shape().width - 15, 0)
         direct_shift = max(ASQ.as_shape().width - 8, 0)
-        dbg_phase = Signal(unsigned(24), init=0)
-        dbg_tone = Signal(signed(ASQ.as_shape().width))
 
         m.d.comb += [
             pmod0.o_cal.ready.eq(1),
@@ -96,12 +93,10 @@ class PaulaTop(Elaboratable):
             in0_sample.eq(pmod0.o_cal.payload[0].as_value()),
             in0_s8.eq(in0_sample >> sample_shift),
             sample_word.eq(Cat(in0_s8.as_unsigned(), in0_s8.as_unsigned())),
-            tri_direct.eq(in0_s8 << direct_shift),
+            in0_direct.eq(in0_s8 << direct_shift),
             pa_l.eq(paudio.ldata.as_signed()),
-            pmod0.i_cal.payload[0]
-            .as_value()
-            .eq(Mux(self.BYPASS_PAULA_AUDIO, dbg_tone, pa_l << out_shift)),
-            pmod0.i_cal.payload[1].as_value().eq(tri_direct),
+            pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
+            pmod0.i_cal.payload[1].as_value().eq(in0_direct),
             pmod0.i_cal.payload[2].eq(0),
             pmod0.i_cal.payload[3].eq(0),
             paudio.clk7_en.eq(clk7_en_pulse),
@@ -128,9 +123,6 @@ class PaulaTop(Elaboratable):
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
         ]
-
-        m.d.sync += dbg_phase.eq(dbg_phase + 15000)
-        m.d.comb += dbg_tone.eq(Mux(dbg_phase[-1], 12000, -12000))
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)

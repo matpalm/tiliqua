@@ -8,7 +8,7 @@ class FakeAgnus(wiring.Component):
     """Hybrid fake Agnus shim: audio DMA lines now, bus placeholders for later."""
 
     BUFFER_DEPTH = 2048
-    DMA_DELAY_SAMPLES = 256
+    DMA_DELAY_SAMPLES = 0
 
     i_audio_dmal: In(unsigned(2))
     i_audio_dmas: In(unsigned(2))

@@ -4,3 +4,6 @@
 [submodule "gateware/deps/VexiiRiscv"]
 	path = gateware/deps/VexiiRiscv
 	url = https://github.com/SpinalHDL/VexiiRiscv.git
+[submodule "gateware/deps/Minimig-AGA_MiSTer"]
+	path = gateware/deps/Minimig-AGA_MiSTer
+	url = https://github.com/MiSTer-devel/Minimig-AGA_MiSTer

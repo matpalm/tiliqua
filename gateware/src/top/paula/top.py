@@ -29,7 +29,7 @@ class PaulaTop(Elaboratable):
             "",
             "sample0 out",
             "sample1 out",
-            "",
+            "sample1 lp out",
             "",
         ],
         io_right=["", "", "", "", "", "TRS MIDI in"],

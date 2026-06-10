@@ -26,6 +26,11 @@ class PaulaTop(Elaboratable):
     AUD0VOL = 0x54
     AUD0DAT = 0x55
 
+    AUD1LEN = 0x5A
+    AUD1PER = 0x5B
+    AUD1VOL = 0x5C
+    AUD1DAT = 0x5D
+
     bitstream_help = BitstreamHelp(
         brief="Paula Sample-core loop (MIDI note control)",
         io_left=[
@@ -53,8 +58,10 @@ class PaulaTop(Elaboratable):
             cfg = json.loads(f.read())
         midi_cfg = cfg["samples"]["midi"]
         midi_channel = midi_cfg["channel"]
-        record_note = midi_cfg["slots"][0]["record_note"]
-        play_note = midi_cfg["slots"][0]["play_note"]
+        record0_note = midi_cfg["slots"][0]["record_note"]
+        play0_note = midi_cfg["slots"][0]["play_note"]
+        record1_note = midi_cfg["slots"][1]["record_note"]
+        play1_note = midi_cfg["slots"][1]["play_note"]
 
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
@@ -76,9 +83,10 @@ class PaulaTop(Elaboratable):
         m.submodules.fake_agnus = fake_agnus = FakeAgnus()
         m.submodules.paudio = paudio = PaulaAudioWrapper()
         m.submodules.sample0 = sample0 = Sample()
+        m.submodules.sample1 = sample1 = Sample()
 
         # state of register programming progress
-        config_state = Signal(unsigned(3), init=0)
+        config_state = Signal(unsigned(4), init=0)
         # paula register address and data buses
         reg_addr = Signal(unsigned(8), init=0)
         reg_data = Signal(unsigned(16), init=0)
@@ -98,24 +106,37 @@ class PaulaTop(Elaboratable):
         # spacing between register writes
         write_hold = Signal(range(2), init=0)
         # num startup AUD0DAT prime writes to do
-        dma_prime_writes = Signal(range(8), init=0)
+        dma_prime_writes = Signal(range(16), init=0)
+        dma_feed_sel = Signal(init=0)
 
-        # Audio sample-rate handshake pulse.
+        # audio rate handshake pulse
         sample_tick = Signal()
-        # Pulse to toggle sample record state.
-        rec_evt = Signal()
-        # Pulse to trigger/toggle sample playback.
-        play_evt = Signal()
+        # record and play state toggle
+        rec0_evt = Signal()
+        play0_evt = Signal()
+        rec1_evt = Signal()
+        play1_evt = Signal()
+
         # Incoming audio sample from PMOD channel 0.
         in0_sample = Signal(signed(ASQ.as_shape().width))
+        # Incoming audio sample from PMOD channel 1.
+        in1_sample = Signal(signed(ASQ.as_shape().width))
         # Incoming sample converted to signed 8-bit.
         in0_s8 = Signal(signed(8))
+        # Incoming channel-1 sample converted to signed 8-bit.
+        in1_s8 = Signal(signed(8))
         # Stored sample output converted to signed 8-bit.
         sample0_s8 = Signal(signed(8))
-        # Packed 16-bit Paula sample word.
-        sample_word = Signal(unsigned(16))
-        # Paula left-channel output sample.
+        # Stored channel-1 sample output converted to signed 8-bit.
+        sample1_s8 = Signal(signed(8))
+        # Packed 16-bit Paula sample words
+        sample0_word = Signal(unsigned(16))
+        sample1_word = Signal(unsigned(16))
+
+        # paula left-channel output sample.
         pa_l = Signal(signed(15))
+        # paula right-channel output sample.
+        pa_r = Signal(signed(15))
 
         # ASQ -> paula for inbound
         sample_shift = max(ASQ.as_shape().width - 8, 0)
@@ -128,13 +149,18 @@ class PaulaTop(Elaboratable):
             pmod0.i_cal.valid.eq(1),
             sample_tick.eq(pmod0.o_cal.valid),
             in0_sample.eq(pmod0.o_cal.payload[0].as_value()),
+            in1_sample.eq(pmod0.o_cal.payload[1].as_value()),
             in0_s8.eq(in0_sample >> sample_shift),
+            in1_s8.eq(in1_sample >> sample_shift),
             sample0_s8.eq(sample0.o_sample.as_value() >> sample_shift),
-            sample_word.eq(Cat(sample0_s8.as_unsigned(), sample0_s8.as_unsigned())),
+            sample1_s8.eq(sample1.o_sample.as_value() >> sample_shift),
+            sample0_word.eq(Cat(sample0_s8.as_unsigned(), sample0_s8.as_unsigned())),
+            sample1_word.eq(Cat(sample1_s8.as_unsigned(), sample1_s8.as_unsigned())),
             # in0_direct.eq(in0_s8 << direct_shift),
             pa_l.eq(paudio.ldata.as_signed()),
+            pa_r.eq(paudio.rdata.as_signed()),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
-            pmod0.i_cal.payload[1].eq(0),
+            pmod0.i_cal.payload[1].as_value().eq(pa_r << out_shift),
             pmod0.i_cal.payload[2].eq(0),
             pmod0.i_cal.payload[3].eq(0),
             paudio.clk7_en.eq(clk7_en_pulse),
@@ -148,25 +174,31 @@ class PaulaTop(Elaboratable):
                 Mux(
                     pa_rst,
                     C(0, 4),
-                    C(0b0001, 4),
+                    C(0b0011, 4),
                 )
             ),
             paudio.audpen.eq(0),
-            fake_agnus.i_audio_dmal.eq(Cat(paudio.dmal[0], C(0, 1))),
-            fake_agnus.i_audio_dmas.eq(Cat(paudio.dmas[0], C(0, 1))),
+            fake_agnus.i_audio_dmal.eq(Cat(paudio.dmal[0], paudio.dmal[1])),
+            fake_agnus.i_audio_dmas.eq(Cat(paudio.dmas[0], paudio.dmas[1])),
             fake_agnus.i_sample_tick.eq(sample_tick),
-            fake_agnus.i_sample0_word.eq(sample_word),
-            fake_agnus.i_sample1_word.eq(0),
+            fake_agnus.i_sample0_word.eq(sample0_word),
+            fake_agnus.i_sample1_word.eq(sample1_word),
             fake_agnus.i_reg_write.eq(reg_addr != 0),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
             sample0.i_sample.eq(in0_sample),
             sample0.sample_tick.eq(sample_tick),
-            sample0.record_toggle_evt.eq(rec_evt),
-            sample0.playback_evt.eq(play_evt),
+            sample0.record_toggle_evt.eq(rec0_evt),
+            sample0.playback_evt.eq(play0_evt),
+            sample1.i_sample.eq(in1_sample),
+            sample1.sample_tick.eq(sample_tick),
+            sample1.record_toggle_evt.eq(rec1_evt),
+            sample1.playback_evt.eq(play1_evt),
+            rec0_evt.eq(0),
+            play0_evt.eq(0),
+            rec1_evt.eq(0),
+            play1_evt.eq(0),
             midi_decode.o.ready.eq(1),
-            rec_evt.eq(0),
-            play_evt.eq(0),
         ]
 
         with m.If(midi_decode.o.valid):
@@ -176,10 +208,14 @@ class PaulaTop(Elaboratable):
                 & (msg.status.nibble.channel == midi_channel)
                 & (msg.midi_payload.note_on.velocity != 0)
             ):
-                with m.If(msg.midi_payload.note_on.note == record_note):
-                    m.d.comb += rec_evt.eq(1)
-                with m.Elif(msg.midi_payload.note_on.note == play_note):
-                    m.d.comb += play_evt.eq(1)
+                with m.If(msg.midi_payload.note_on.note == record0_note):
+                    m.d.comb += rec0_evt.eq(1)
+                with m.Elif(msg.midi_payload.note_on.note == play0_note):
+                    m.d.comb += play0_evt.eq(1)
+                with m.Elif(msg.midi_payload.note_on.note == record1_note):
+                    m.d.comb += rec1_evt.eq(1)
+                with m.Elif(msg.midi_payload.note_on.note == play1_note):
+                    m.d.comb += play1_evt.eq(1)
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)
@@ -236,23 +272,64 @@ class PaulaTop(Elaboratable):
                             reg_data.eq(Sample.MAX_CAPTURE_SAMPLES),
                             config_state.eq(4),
                             write_hold.eq(1),
-                            dma_prime_writes.eq(4),
                         ]
                     with m.Case(4):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD1PER),
+                            reg_data.eq(self.PAULA_PERIOD),
+                            config_state.eq(5),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(5):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD1VOL),
+                            reg_data.eq(64),
+                            config_state.eq(6),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(6):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD1LEN),
+                            reg_data.eq(Sample.MAX_CAPTURE_SAMPLES),
+                            config_state.eq(7),
+                            write_hold.eq(1),
+                            dma_prime_writes.eq(8),
+                            dma_feed_sel.eq(0),
+                        ]
+                    with m.Case(7):
                         with m.If(~pa_rst):
                             with m.If(dma_prime_writes != 0):
-                                m.d.sync += [
-                                    reg_addr.eq(self.AUD0DAT),
-                                    reg_data.eq(fake_agnus.o_audio_data0),
-                                    write_hold.eq(1),
-                                    dma_prime_writes.eq(dma_prime_writes - 1),
-                                ]
+                                with m.If(dma_feed_sel == 0):
+                                    m.d.sync += [
+                                        reg_addr.eq(self.AUD0DAT),
+                                        reg_data.eq(fake_agnus.o_audio_data0),
+                                        write_hold.eq(1),
+                                        dma_prime_writes.eq(dma_prime_writes - 1),
+                                        dma_feed_sel.eq(1),
+                                    ]
+                                with m.Else():
+                                    m.d.sync += [
+                                        reg_addr.eq(self.AUD1DAT),
+                                        reg_data.eq(fake_agnus.o_audio_data1),
+                                        write_hold.eq(1),
+                                        dma_prime_writes.eq(dma_prime_writes - 1),
+                                        dma_feed_sel.eq(0),
+                                    ]
                             with m.Else():
-                                m.d.sync += [
-                                    reg_addr.eq(self.AUD0DAT),
-                                    reg_data.eq(fake_agnus.o_audio_data0),
-                                    write_hold.eq(1),
-                                ]
+                                with m.If(dma_feed_sel == 0):
+                                    m.d.sync += [
+                                        reg_addr.eq(self.AUD0DAT),
+                                        reg_data.eq(fake_agnus.o_audio_data0),
+                                        write_hold.eq(1),
+                                        dma_feed_sel.eq(1),
+                                    ]
+                                with m.Else():
+                                    m.d.sync += [
+                                        reg_addr.eq(self.AUD1DAT),
+                                        reg_data.eq(fake_agnus.o_audio_data1),
+                                        write_hold.eq(1),
+                                        dma_feed_sel.eq(0),
+                                    ]
 
         return m
 

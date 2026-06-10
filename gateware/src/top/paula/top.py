@@ -14,6 +14,7 @@ from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
 
 from fake_agnus import FakeAgnus
+from channel import Channel
 from paula_audio_wrapper import PaulaAudioWrapper
 from sample import Sample
 
@@ -82,8 +83,14 @@ class PaulaTop(Elaboratable):
 
         m.submodules.fake_agnus = fake_agnus = FakeAgnus()
         m.submodules.paudio = paudio = PaulaAudioWrapper()
-        m.submodules.sample0 = sample0 = Sample()
-        m.submodules.sample1 = sample1 = Sample()
+        m.submodules.channel0 = channel0 = Channel(
+            record_note=record0_note,
+            play_note=play0_note,
+        )
+        m.submodules.channel1 = channel1 = Channel(
+            record_note=record1_note,
+            play_note=play1_note,
+        )
 
         # state of register programming progress
         config_state = Signal(unsigned(4), init=0)
@@ -109,37 +116,16 @@ class PaulaTop(Elaboratable):
         dma_prime_writes = Signal(range(16), init=0)
         dma_feed_sel = Signal(init=0)
 
-        # audio rate handshake pulse
+        # Audio rate handshake pulse.
         sample_tick = Signal()
-        # record and play state toggle
-        rec0_evt = Signal()
-        play0_evt = Signal()
-        rec1_evt = Signal()
-        play1_evt = Signal()
-
-        # Incoming audio sample from PMOD channel 0.
-        in0_sample = Signal(signed(ASQ.as_shape().width))
-        # Incoming audio sample from PMOD channel 1.
-        in1_sample = Signal(signed(ASQ.as_shape().width))
-        # Incoming sample converted to signed 8-bit.
-        in0_s8 = Signal(signed(8))
-        # Incoming channel-1 sample converted to signed 8-bit.
-        in1_s8 = Signal(signed(8))
-        # Stored sample output converted to signed 8-bit.
-        sample0_s8 = Signal(signed(8))
-        # Stored channel-1 sample output converted to signed 8-bit.
-        sample1_s8 = Signal(signed(8))
-        # Packed 16-bit Paula sample words
-        sample0_word = Signal(unsigned(16))
-        sample1_word = Signal(unsigned(16))
+        note_on_evt = Signal()
+        note_on_note = Signal(unsigned(8))
 
         # paula left-channel output sample.
         pa_l = Signal(signed(15))
         # paula right-channel output sample.
         pa_r = Signal(signed(15))
 
-        # ASQ -> paula for inbound
-        sample_shift = max(ASQ.as_shape().width - 8, 0)
         # paula -> ASQ for outbound
         out_shift = max(ASQ.as_shape().width - 15, 0)
         # direct_shift = max(ASQ.as_shape().width - 8, 0)
@@ -148,15 +134,8 @@ class PaulaTop(Elaboratable):
             pmod0.o_cal.ready.eq(1),
             pmod0.i_cal.valid.eq(1),
             sample_tick.eq(pmod0.o_cal.valid),
-            in0_sample.eq(pmod0.o_cal.payload[0].as_value()),
-            in1_sample.eq(pmod0.o_cal.payload[1].as_value()),
-            in0_s8.eq(in0_sample >> sample_shift),
-            in1_s8.eq(in1_sample >> sample_shift),
-            sample0_s8.eq(sample0.o_sample.as_value() >> sample_shift),
-            sample1_s8.eq(sample1.o_sample.as_value() >> sample_shift),
-            sample0_word.eq(Cat(sample0_s8.as_unsigned(), sample0_s8.as_unsigned())),
-            sample1_word.eq(Cat(sample1_s8.as_unsigned(), sample1_s8.as_unsigned())),
-            # in0_direct.eq(in0_s8 << direct_shift),
+            note_on_evt.eq(0),
+            note_on_note.eq(0),
             pa_l.eq(paudio.ldata.as_signed()),
             pa_r.eq(paudio.rdata.as_signed()),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
@@ -181,23 +160,19 @@ class PaulaTop(Elaboratable):
             fake_agnus.i_audio_dmal.eq(Cat(paudio.dmal[0], paudio.dmal[1])),
             fake_agnus.i_audio_dmas.eq(Cat(paudio.dmas[0], paudio.dmas[1])),
             fake_agnus.i_sample_tick.eq(sample_tick),
-            fake_agnus.i_sample0_word.eq(sample0_word),
-            fake_agnus.i_sample1_word.eq(sample1_word),
+            fake_agnus.i_sample0_word.eq(channel0.o_sample_word),
+            fake_agnus.i_sample1_word.eq(channel1.o_sample_word),
             fake_agnus.i_reg_write.eq(reg_addr != 0),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
-            sample0.i_sample.eq(in0_sample),
-            sample0.sample_tick.eq(sample_tick),
-            sample0.record_toggle_evt.eq(rec0_evt),
-            sample0.playback_evt.eq(play0_evt),
-            sample1.i_sample.eq(in1_sample),
-            sample1.sample_tick.eq(sample_tick),
-            sample1.record_toggle_evt.eq(rec1_evt),
-            sample1.playback_evt.eq(play1_evt),
-            rec0_evt.eq(0),
-            play0_evt.eq(0),
-            rec1_evt.eq(0),
-            play1_evt.eq(0),
+            channel0.i_sample_tick.eq(sample_tick),
+            channel0.i_sample.eq(pmod0.o_cal.payload[0].as_value()),
+            channel0.i_note_on_valid.eq(note_on_evt),
+            channel0.i_note.eq(note_on_note),
+            channel1.i_sample_tick.eq(sample_tick),
+            channel1.i_sample.eq(pmod0.o_cal.payload[1].as_value()),
+            channel1.i_note_on_valid.eq(note_on_evt),
+            channel1.i_note.eq(note_on_note),
             midi_decode.o.ready.eq(1),
         ]
 
@@ -208,14 +183,10 @@ class PaulaTop(Elaboratable):
                 & (msg.status.nibble.channel == midi_channel)
                 & (msg.midi_payload.note_on.velocity != 0)
             ):
-                with m.If(msg.midi_payload.note_on.note == record0_note):
-                    m.d.comb += rec0_evt.eq(1)
-                with m.Elif(msg.midi_payload.note_on.note == play0_note):
-                    m.d.comb += play0_evt.eq(1)
-                with m.Elif(msg.midi_payload.note_on.note == record1_note):
-                    m.d.comb += rec1_evt.eq(1)
-                with m.Elif(msg.midi_payload.note_on.note == play1_note):
-                    m.d.comb += play1_evt.eq(1)
+                m.d.comb += [
+                    note_on_evt.eq(1),
+                    note_on_note.eq(msg.midi_payload.note_on.note),
+                ]
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)

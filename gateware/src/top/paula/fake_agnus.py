@@ -5,10 +5,8 @@ from amaranth.lib.wiring import In, Out
 
 
 class FakeAgnus(wiring.Component):
-    """Hybrid fake Agnus shim: audio DMA lines now, bus placeholders for later."""
 
     BUFFER_DEPTH = 2048
-    DMA_DELAY_SAMPLES = 0
 
     i_audio_dmal: In(unsigned(2))
     i_audio_dmas: In(unsigned(2))
@@ -44,26 +42,15 @@ class FakeAgnus(wiring.Component):
         wr_ptr = Signal(range(self.BUFFER_DEPTH), init=0)
         rd_ptr0 = Signal(range(self.BUFFER_DEPTH), init=0)
         rd_ptr1 = Signal(range(self.BUFFER_DEPTH), init=0)
-        delayed_base_ptr = Signal(range(self.BUFFER_DEPTH))
-
-        delay = self.DMA_DELAY_SAMPLES
-
-        m.d.comb += delayed_base_ptr.eq(
-            Mux(
-                wr_ptr >= delay,
-                wr_ptr - delay,
-                wr_ptr + (self.BUFFER_DEPTH - delay),
-            )
-        )
 
         with m.If(self.i_sample_tick):
             m.d.sync += wr_ptr.eq(Mux(wr_ptr == (self.BUFFER_DEPTH - 1), 0, wr_ptr + 1))
 
         # Align DMA readers to a delayed point in the ring buffer on restart.
         with m.If(self.i_audio_dmas[0]):
-            m.d.sync += rd_ptr0.eq(delayed_base_ptr)
+            m.d.sync += rd_ptr0.eq(wr_ptr)
         with m.If(self.i_audio_dmas[1]):
-            m.d.sync += rd_ptr1.eq(delayed_base_ptr)
+            m.d.sync += rd_ptr1.eq(wr_ptr)
 
         with m.If(self.i_sample_tick):
             m.d.sync += rd_ptr0.eq(

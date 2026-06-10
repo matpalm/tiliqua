@@ -12,6 +12,8 @@ from sample import Sample
 class PaulaInstance(wiring.Component):
     """Paula-side owner for sample channels and register-backed control."""
 
+    USE_FAKE_AGNUS_DMA = True
+
     i_sample0: In(ASQ)
     i_sample1: In(ASQ)
     sample_tick: In(1)
@@ -82,16 +84,14 @@ class PaulaInstance(wiring.Component):
         # Approximate Minimig Paula timing enables in sync domain.
         clk7_div = Signal(range(8), init=0)
         clk7_en_pulse = Signal(init=0)
-        cck_phase = Signal(init=0)
-        cck_pulse = Signal(init=0)
         strhor_div = Signal(range(480), init=0)
         strhor_pulse = Signal(init=0)
+        write_hold = Signal(range(2), init=0)
 
         with m.If(clk7_div == 7):
             m.d.sync += [
                 clk7_div.eq(0),
                 clk7_en_pulse.eq(1),
-                cck_phase.eq(~cck_phase),
             ]
         with m.Else():
             m.d.sync += [
@@ -100,11 +100,6 @@ class PaulaInstance(wiring.Component):
             ]
 
         with m.If(clk7_en_pulse):
-            with m.If(cck_phase):
-                m.d.sync += cck_pulse.eq(1)
-            with m.Else():
-                m.d.sync += cck_pulse.eq(0)
-
             with m.If(strhor_div == 479):
                 m.d.sync += [
                     strhor_div.eq(0),
@@ -116,10 +111,7 @@ class PaulaInstance(wiring.Component):
                     strhor_pulse.eq(0),
                 ]
         with m.Else():
-            m.d.sync += [
-                cck_pulse.eq(0),
-                strhor_pulse.eq(0),
-            ]
+            m.d.sync += strhor_pulse.eq(0)
 
         m.d.comb += [
             dma_toggle_evt0.eq(aud_dmaen0 ^ aud_dmaen0_prev),
@@ -151,7 +143,7 @@ class PaulaInstance(wiring.Component):
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
             paudio.clk7_en.eq(clk7_en_pulse),
-            paudio.cck.eq(cck_pulse),
+            paudio.cck.eq(clk7_en_pulse),
             paudio.rst.eq(0),
             paudio.strhor.eq(strhor_pulse),
             paudio.reg_address_in.eq(reg_addr),
@@ -194,68 +186,91 @@ class PaulaInstance(wiring.Component):
                     cfg_pending1.eq(1),
                 ]
 
-        # Channel register/data feed into paula_audio.
-        m.d.sync += [
-            reg_addr.eq(0),
-            reg_data.eq(0),
-        ]
-
         with m.If(self.sample_tick):
             m.d.sync += dat_phase.eq(~dat_phase)
-            # Feed paula_audio AUDxDAT continuously from current sample outputs.
-            with m.If(dat_phase == 0):
-                m.d.sync += [
-                    reg_addr.eq(AUD0DAT),
-                    reg_data.eq(sample0_word),
-                ]
+
+        with m.If(clk7_en_pulse):
+            with m.If(write_hold != 0):
+                m.d.sync += write_hold.eq(write_hold - 1)
             with m.Else():
-                m.d.sync += [
-                    reg_addr.eq(AUD1DAT),
-                    reg_data.eq(sample1_word),
-                ]
-            # Background channel setup writes.
-            with m.If(cfg_pending0 != 0):
-                with m.Switch(cfg_pending0):
-                    with m.Case(1):
-                        m.d.sync += [
-                            reg_addr.eq(AUD0LEN),
-                            reg_data.eq(aud_len0),
-                            cfg_pending0.eq(2),
-                        ]
-                    with m.Case(2):
-                        m.d.sync += [
-                            reg_addr.eq(AUD0PER),
-                            reg_data.eq(aud_per0),
-                            cfg_pending0.eq(3),
-                        ]
-                    with m.Case(3):
-                        m.d.sync += [
-                            reg_addr.eq(AUD0VOL),
-                            reg_data.eq(64),
-                            cfg_pending0.eq(0),
-                            aud_dmaen0.eq(play_target0),
-                        ]
-            with m.Elif(cfg_pending1 != 0):
-                with m.Switch(cfg_pending1):
-                    with m.Case(1):
-                        m.d.sync += [
-                            reg_addr.eq(AUD1LEN),
-                            reg_data.eq(aud_len1),
-                            cfg_pending1.eq(2),
-                        ]
-                    with m.Case(2):
-                        m.d.sync += [
-                            reg_addr.eq(AUD1PER),
-                            reg_data.eq(aud_per1),
-                            cfg_pending1.eq(3),
-                        ]
-                    with m.Case(3):
-                        m.d.sync += [
-                            reg_addr.eq(AUD1VOL),
-                            reg_data.eq(64),
-                            cfg_pending1.eq(0),
-                            aud_dmaen1.eq(play_target1),
-                        ]
+                # Channel setup writes have priority over sample data writes.
+                with m.If(cfg_pending0 != 0):
+                    with m.Switch(cfg_pending0):
+                        with m.Case(1):
+                            m.d.sync += [
+                                reg_addr.eq(AUD0LEN),
+                                reg_data.eq(aud_len0),
+                                cfg_pending0.eq(2),
+                                write_hold.eq(1),
+                            ]
+                        with m.Case(2):
+                            m.d.sync += [
+                                reg_addr.eq(AUD0PER),
+                                reg_data.eq(aud_per0),
+                                cfg_pending0.eq(3),
+                                write_hold.eq(1),
+                            ]
+                        with m.Case(3):
+                            m.d.sync += [
+                                reg_addr.eq(AUD0VOL),
+                                reg_data.eq(64),
+                                cfg_pending0.eq(0),
+                                aud_dmaen0.eq(play_target0),
+                                write_hold.eq(1),
+                            ]
+                with m.Elif(cfg_pending1 != 0):
+                    with m.Switch(cfg_pending1):
+                        with m.Case(1):
+                            m.d.sync += [
+                                reg_addr.eq(AUD1LEN),
+                                reg_data.eq(aud_len1),
+                                cfg_pending1.eq(2),
+                                write_hold.eq(1),
+                            ]
+                        with m.Case(2):
+                            m.d.sync += [
+                                reg_addr.eq(AUD1PER),
+                                reg_data.eq(aud_per1),
+                                cfg_pending1.eq(3),
+                                write_hold.eq(1),
+                            ]
+                        with m.Case(3):
+                            m.d.sync += [
+                                reg_addr.eq(AUD1VOL),
+                                reg_data.eq(64),
+                                cfg_pending1.eq(0),
+                                aud_dmaen1.eq(play_target1),
+                                write_hold.eq(1),
+                            ]
+                with m.Else():
+                    with m.If(self.USE_FAKE_AGNUS_DMA):
+                        # In DMA mode, only provide AUDxDAT when Fake Agnus grants Paula requests.
+                        with m.If(fake_agnus.o_audio_grant[0]):
+                            m.d.sync += [
+                                reg_addr.eq(AUD0DAT),
+                                reg_data.eq(sample0_word),
+                                write_hold.eq(1),
+                            ]
+                        with m.Elif(fake_agnus.o_audio_grant[1]):
+                            m.d.sync += [
+                                reg_addr.eq(AUD1DAT),
+                                reg_data.eq(sample1_word),
+                                write_hold.eq(1),
+                            ]
+                    with m.Else():
+                        # Known-good CPU feed mode: continuously push AUDxDAT.
+                        with m.If(dat_phase == 0):
+                            m.d.sync += [
+                                reg_addr.eq(AUD0DAT),
+                                reg_data.eq(sample0_word),
+                                write_hold.eq(1),
+                            ]
+                        with m.Else():
+                            m.d.sync += [
+                                reg_addr.eq(AUD1DAT),
+                                reg_data.eq(sample1_word),
+                                write_hold.eq(1),
+                            ]
 
         m.d.sync += [
             aud_dmaen0_prev.eq(aud_dmaen0),

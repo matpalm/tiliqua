@@ -49,8 +49,6 @@ class Sample(wiring.Component):
         play_addr = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
         play_count = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
         play_acc = Signal(range(self.CAPTURE_DENOM), init=0)
-
-        # Deterministic phase for 48 kHz -> 16726 Hz
         decim_acc = Signal(range(self.CAPTURE_DENOM), init=0)
 
         m.submodules.dither = dither = Dither8BitQuantiser()
@@ -122,7 +120,15 @@ class Sample(wiring.Component):
                     play_acc.eq(0),
                 ]
         with m.Elif(self.playback_evt):
-            with m.If(valid_length != 0):
+            # Toggle playback: if active, stop; if idle and data exists, start.
+            with m.If(play_state != self.PlayState.IDLE):
+                m.d.sync += [
+                    play_state.eq(self.PlayState.IDLE),
+                    play_addr.eq(0),
+                    play_count.eq(0),
+                    play_acc.eq(0),
+                ]
+            with m.Elif(valid_length != 0):
                 m.d.sync += [
                     recording.eq(0),
                     play_state.eq(self.PlayState.PREFETCH),
@@ -155,11 +161,11 @@ class Sample(wiring.Component):
             with m.If(do_play_advance):
                 m.d.sync += play_acc.eq(play_acc - self.CAPTURE_EDGE)
                 with m.If(play_last):
+                    # Playback is a toggle mode, so wrap and continue until toggled off.
                     m.d.sync += [
-                        play_state.eq(self.PlayState.IDLE),
+                        play_state.eq(self.PlayState.PREFETCH),
                         play_addr.eq(0),
                         play_count.eq(0),
-                        play_acc.eq(0),
                     ]
                 with m.Else():
                     m.d.sync += [

@@ -1,27 +1,30 @@
-"""
-Paula recorder/playback scaffold using on-chip EBR.
-
-Implements two independent mono sampler paths:
-
-Recording is deterministically decimated from 48 kHz input to 16726 Hz
-capture rate using a fixed phase accumulator.
-"""
+"""Minimal Paula bring-up with synthetic AUD0DAT feed (no capture path)."""
 
 from amaranth import *
 from amaranth.lib import cdc, wiring
 
-from tiliqua import midi
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
+from tiliqua.dsp import ASQ
 from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
 
-from core import PaulaRecorderCore
+from paula_audio_wrapper import PaulaAudioWrapper
 
 class PaulaTop(Elaboratable):
 
+    SAMPLE_COUNT = 256
+    PAULA_PERIOD = 124
+    BYPASS_PAULA_AUDIO = False
+    USE_DMA_MODE = False
+
+    AUD0LEN = 0x52
+    AUD0PER = 0x53
+    AUD0VOL = 0x54
+    AUD0DAT = 0x55
+
     bitstream_help = BitstreamHelp(
-        brief="Paula record/playback (EBR, 2s max)",
+        brief="Paula tone bring-up (Paula path default)",
         io_left=[
             "sample0 in",
             "sample1 in",
@@ -53,19 +56,124 @@ class PaulaTop(Elaboratable):
             self.clock_settings.audio_clock
         )
         wiring.connect(m, pmod0.pins, pmod0_provider.pins)
-        m.d.comb += pmod0.codec_mute.eq(reboot.mute)
+        # Keep codec forced unmuted during Paula bring-up.
+        m.d.comb += pmod0.codec_mute.eq(0)
 
-        m.submodules.core = core = PaulaRecorderCore()
-        wiring.connect(m, pmod0.o_cal, core.i)
-        wiring.connect(m, core.o, pmod0.i_cal)
+        m.submodules.paudio = paudio = PaulaAudioWrapper()
 
-        midi_pins = platform.request("midi")
-        m.submodules.serialrx = serialrx = midi.SerialRx(
-            system_clk_hz=60e6, pins=midi_pins
-        )
-        m.submodules.midi_decode = midi_decode = midi.MidiDecodeSerial()
-        wiring.connect(m, serialrx.o, midi_decode.i)
-        wiring.connect(m, midi_decode.o, core.i_midi)
+        config_state = Signal(unsigned(3), init=0)
+        reg_addr = Signal(unsigned(8), init=0)
+        reg_data = Signal(unsigned(16), init=0)
+        reset_ctr = Signal(range(64), init=63)
+        pa_rst = Signal()
+        tone_u8 = Signal(unsigned(8), init=0x80)
+
+        # Paula timing strobes in sync domain.
+        clk7_div = Signal(range(8), init=0)
+        clk7_en_pulse = Signal(init=0)
+        strhor_div = Signal(range(480), init=0)
+        strhor_pulse = Signal(init=0)
+        write_hold = Signal(range(2), init=0)
+
+        tone_word = Signal(unsigned(16))
+        pa_l = Signal(signed(15))
+        out_shift = max(ASQ.as_shape().width - 15, 0)
+        dbg_phase = Signal(unsigned(24), init=0)
+        dbg_tone = Signal(signed(ASQ.as_shape().width))
+
+        m.d.comb += [
+            pmod0.o_cal.ready.eq(1),
+            pmod0.i_cal.valid.eq(1),
+            tone_word.eq(Cat(tone_u8, tone_u8)),
+            pa_l.eq(paudio.ldata.as_signed()),
+            pmod0.i_cal.payload[0]
+            .as_value()
+            .eq(Mux(self.BYPASS_PAULA_AUDIO, dbg_tone, pa_l << out_shift)),
+            pmod0.i_cal.payload[1].eq(0),
+            pmod0.i_cal.payload[2].eq(0),
+            pmod0.i_cal.payload[3].eq(0),
+            paudio.clk7_en.eq(clk7_en_pulse),
+            paudio.cck.eq(clk7_en_pulse),
+            pa_rst.eq(reset_ctr != 0),
+            paudio.rst.eq(pa_rst),
+            paudio.strhor.eq(strhor_pulse),
+            paudio.reg_address_in.eq(reg_addr),
+            paudio.data_in.eq(reg_data),
+            paudio.dmaena.eq(
+                Mux(pa_rst, C(0, 4), Mux(self.USE_DMA_MODE, C(0b0001, 4), C(0, 4)))
+            ),
+            paudio.audpen.eq(0),
+        ]
+
+        m.d.sync += dbg_phase.eq(dbg_phase + 15000)
+        m.d.comb += dbg_tone.eq(Mux(dbg_phase[-1], 12000, -12000))
+
+        with m.If(reset_ctr != 0):
+            m.d.sync += reset_ctr.eq(reset_ctr - 1)
+
+        with m.Elif(config_state == 0):
+            m.d.sync += config_state.eq(1)
+
+        with m.If(clk7_div == 7):
+            m.d.sync += [
+                clk7_div.eq(0),
+                clk7_en_pulse.eq(1),
+            ]
+        with m.Else():
+            m.d.sync += [
+                clk7_div.eq(clk7_div + 1),
+                clk7_en_pulse.eq(0),
+            ]
+
+        with m.If(clk7_en_pulse):
+            with m.If(strhor_div == 479):
+                m.d.sync += [
+                    strhor_div.eq(0),
+                    strhor_pulse.eq(1),
+                ]
+            with m.Else():
+                m.d.sync += [
+                    strhor_div.eq(strhor_div + 1),
+                    strhor_pulse.eq(0),
+                ]
+        with m.Else():
+            m.d.sync += strhor_pulse.eq(0)
+
+        with m.If(clk7_en_pulse):
+            with m.If(write_hold != 0):
+                m.d.sync += write_hold.eq(write_hold - 1)
+            with m.Else():
+                with m.Switch(config_state):
+                    with m.Case(1):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD0PER),
+                            reg_data.eq(self.PAULA_PERIOD),
+                            config_state.eq(2),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(2):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD0VOL),
+                            reg_data.eq(64),
+                            config_state.eq(3),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(3):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD0LEN),
+                            reg_data.eq(self.SAMPLE_COUNT),
+                            config_state.eq(4),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(4):
+                        # Stream a synthetic waveform continuously (CPU mode by default).
+                        with m.If(~pa_rst):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD0DAT),
+                                reg_data.eq(tone_word),
+                                tone_u8.eq(tone_u8 + 1),
+                                write_hold.eq(1),
+                            ]
 
         return m
 

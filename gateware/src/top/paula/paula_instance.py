@@ -27,6 +27,8 @@ class PaulaInstance(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
+        PAULA_PERIOD_DEFAULT = 124
+
         AUD0LEN = 0x52
         AUD0PER = 0x53
         AUD0VOL = 0x54
@@ -77,6 +79,48 @@ class PaulaInstance(wiring.Component):
         pa_l = Signal(signed(15))
         pa_r = Signal(signed(15))
 
+        # Approximate Minimig Paula timing enables in sync domain.
+        clk7_div = Signal(range(8), init=0)
+        clk7_en_pulse = Signal(init=0)
+        cck_phase = Signal(init=0)
+        cck_pulse = Signal(init=0)
+        strhor_div = Signal(range(480), init=0)
+        strhor_pulse = Signal(init=0)
+
+        with m.If(clk7_div == 7):
+            m.d.sync += [
+                clk7_div.eq(0),
+                clk7_en_pulse.eq(1),
+                cck_phase.eq(~cck_phase),
+            ]
+        with m.Else():
+            m.d.sync += [
+                clk7_div.eq(clk7_div + 1),
+                clk7_en_pulse.eq(0),
+            ]
+
+        with m.If(clk7_en_pulse):
+            with m.If(cck_phase):
+                m.d.sync += cck_pulse.eq(1)
+            with m.Else():
+                m.d.sync += cck_pulse.eq(0)
+
+            with m.If(strhor_div == 479):
+                m.d.sync += [
+                    strhor_div.eq(0),
+                    strhor_pulse.eq(1),
+                ]
+            with m.Else():
+                m.d.sync += [
+                    strhor_div.eq(strhor_div + 1),
+                    strhor_pulse.eq(0),
+                ]
+        with m.Else():
+            m.d.sync += [
+                cck_pulse.eq(0),
+                strhor_pulse.eq(0),
+            ]
+
         m.d.comb += [
             dma_toggle_evt0.eq(aud_dmaen0 ^ aud_dmaen0_prev),
             dma_toggle_evt1.eq(aud_dmaen1 ^ aud_dmaen1_prev),
@@ -106,10 +150,10 @@ class PaulaInstance(wiring.Component):
             fake_agnus.i_reg_write.eq(reg_addr != 0),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
-            paudio.clk7_en.eq(self.sample_tick),
-            paudio.cck.eq(self.sample_tick),
+            paudio.clk7_en.eq(clk7_en_pulse),
+            paudio.cck.eq(cck_pulse),
             paudio.rst.eq(0),
-            paudio.strhor.eq(self.sample_tick),
+            paudio.strhor.eq(strhor_pulse),
             paudio.reg_address_in.eq(reg_addr),
             paudio.data_in.eq(reg_data),
             # First two Paula voices map to the two sample pads.
@@ -129,7 +173,7 @@ class PaulaInstance(wiring.Component):
                 m.d.sync += [
                     aud_loc0.eq(0),
                     aud_len0.eq(Sample.MAX_CAPTURE_SAMPLES),
-                    aud_per0.eq(Sample.CAPTURE_DENOM),
+                    aud_per0.eq(PAULA_PERIOD_DEFAULT),
                     play_target0.eq(1),
                     cfg_pending0.eq(1),
                 ]
@@ -145,7 +189,7 @@ class PaulaInstance(wiring.Component):
                 m.d.sync += [
                     aud_loc1.eq(0),
                     aud_len1.eq(Sample.MAX_CAPTURE_SAMPLES),
-                    aud_per1.eq(Sample.CAPTURE_DENOM),
+                    aud_per1.eq(PAULA_PERIOD_DEFAULT),
                     play_target1.eq(1),
                     cfg_pending1.eq(1),
                 ]

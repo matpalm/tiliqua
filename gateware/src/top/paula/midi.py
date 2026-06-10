@@ -1,7 +1,86 @@
 from amaranth import *
 from amaranth.lib import wiring
+from typing import Tuple
 
 from tiliqua import midi as tiliqua_midi
+
+
+class RegisterMapping(object):
+    """map unsigned values in enc_range to param_range using linear|exp via a LUT"""
+
+    def __init__(
+        self,
+        enc_range: Tuple[int, int],
+        reg_range: Tuple[int, int],
+        reg_init: int,
+        mapping="linear",
+    ):
+        self.enc_min, self.enc_max = enc_range
+        self.param_min, self.param_max = reg_range
+
+        # if self.enc_max < self.enc_min:
+        #     raise ValueError("enc_range max must be >= min")
+        # if self.param_max < self.param_min:
+        #     raise ValueError("param_range max must be >= min")
+
+        # mapping = mapping.lower()
+        # if mapping not in ["linear", "exp"]:
+        #     raise ValueError("mapping must be one of: linear, exp")
+
+        self.mapping = mapping
+        self.lut_len = (self.enc_max - self.enc_min) + 1
+
+        # if self.lut_len <= 0:
+        #     raise ValueError("enc_range must contain at least one value")
+
+        # if self.mapping == "exp" and self.param_min <= 0:
+        #     raise ValueError("exponential mapping requires param_range min > 0")
+
+        self.lut_values = self._build_lut_values()
+
+        if self.param_min < 0:
+            value_bits = max(abs(self.param_min), abs(self.param_max)).bit_length() + 1
+            value_shape = signed(value_bits)
+        else:
+            value_bits = max(self.param_max, 1).bit_length()
+            value_shape = unsigned(value_bits)
+        self._lut = Array(Const(v, value_shape) for v in self.lut_values)
+
+        # build the two corresponding signals
+        mpv = max(self.lut_values)
+        self.target = Signal(range(mpv + 1), init=reg_init)
+        self.written = Signal(range(mpv + 1), init=0)
+
+    def _build_lut_values(self):
+        if self.lut_len == 1:
+            return [self.param_min]
+
+        values = []
+        span = self.lut_len - 1
+
+        if self.mapping == "linear":
+            for i in range(self.lut_len):
+                t = i / span
+                v = self.param_min + t * (self.param_max - self.param_min)
+                values.append(int(round(v)))
+            return values
+
+        # Exponential/geometric interpolation.
+        ratio = self.param_max / self.param_min
+        for i in range(self.lut_len):
+            t = i / span
+            v = self.param_min * (ratio**t)
+            values.append(int(round(v)))
+        return values
+
+    def map(self, encoder_value: Signal):
+        idx = encoder_value - self.enc_min
+        clamped_idx = Mux(
+            encoder_value <= self.enc_min,
+            0,
+            Mux(encoder_value >= self.enc_max, self.lut_len - 1, idx),
+        )
+        return self._lut[clamped_idx]
 
 
 class MidiProcessing(Elaboratable):
@@ -30,16 +109,10 @@ class MidiProcessing(Elaboratable):
         m.submodules.midi_decode = midi_decode = tiliqua_midi.MidiDecodeSerial()
         wiring.connect(m, serialrx.o, midi_decode.i)
 
-        # Map 0..127 MIDI CC data to 0..64 inclusive.
-        cc_data = Signal(unsigned(8))
-        cc_value_0_to_64 = Signal(unsigned(7))
-
         m.d.comb += [
             midi_decode.o.ready.eq(1),
             self.o_note_on_valid.eq(0),
             self.o_note.eq(0),
-            cc_data.eq(0),
-            cc_value_0_to_64.eq((cc_data + 1) >> 1),
         ]
 
         with m.If(midi_decode.o.valid):
@@ -57,10 +130,11 @@ class MidiProcessing(Elaboratable):
                 (msg.status.kind == tiliqua_midi.Status.Kind.CONTROL_CHANGE)
                 & (msg.status.nibble.channel == self.midi_channel)
             ):
-                m.d.comb += cc_data.eq(msg.midi_payload.control_change.data)
                 with m.Switch(msg.midi_payload.control_change.controller_number):
-                    for cc_number, target_signal in self.cc_mapping.items():
+                    for cc_number, mapping in self.cc_mapping.items():
                         with m.Case(int(cc_number)):
-                            m.d.sync += target_signal.eq(cc_value_0_to_64)
+                            m.d.sync += mapping.target.eq(
+                                mapping.map(msg.midi_payload.control_change.data)
+                            )
 
         return m

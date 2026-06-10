@@ -14,13 +14,15 @@ from tiliqua.platform import RebootProvider
 
 from fake_agnus import FakeAgnus
 from channel import Channel
-from midi import MidiProcessing
+from midi import MidiProcessing, RegisterMapping
 from paula_audio_wrapper import PaulaAudioWrapper
 from sample import Sample
 
 class PaulaTop(Elaboratable):
 
-    PAULA_PERIOD = 124
+    PAULA_DFT_PERIOD = 124
+    PAULA_MINUS_ONE_OCTAVE = PAULA_DFT_PERIOD // 2
+    PAULA_PLUS_ONE_OCTAVE = PAULA_DFT_PERIOD * 2
 
     # TODO: if going to 3 channels, move these register defns in channel.py
 
@@ -63,12 +65,15 @@ class PaulaTop(Elaboratable):
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
 
-        # _target is latest known value. _written is last written.
-        aud0vol_target = Signal(range(65), init=64)
-        aud0vol_written = Signal(range(65), init=0)
+        self.register_mappings = {
+            "AUD0VOL": RegisterMapping(
+                enc_range=(0, 127), reg_range=(0, 64), reg_init=60
+            )
+        }
 
         m.submodules.midi_proc = midi_proc = MidiProcessing(
-            midi_channel=midi_cfg["midi_channel"], cc_mapping={10: aud0vol_target}
+            midi_channel=midi_cfg["midi_channel"],
+            cc_mapping={74: self.register_mappings["AUD0VOL"]},
         )
 
         m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
@@ -210,18 +215,19 @@ class PaulaTop(Elaboratable):
                     with m.Case(1):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0PER),
-                            reg_data.eq(self.PAULA_PERIOD),
-                            config_state.eq(2),
+                            reg_data.eq(self.PAULA_DFT_PERIOD),
+                            config_state.eq(3),  # note: straight to 3
                             write_hold.eq(1),
                         ]
-                    with m.Case(2):
-                        m.d.sync += [
-                            reg_addr.eq(self.AUD0VOL),
-                            reg_data.eq(aud0vol_target),
-                            aud0vol_written.eq(aud0vol_target),
-                            config_state.eq(3),
-                            write_hold.eq(1),
-                        ]
+                    # with m.Case(2):
+                    #     aud0vol = self.register_mappings["AUD0VOL"]
+                    #     m.d.sync += [
+                    #         reg_addr.eq(self.AUD0VOL),
+                    #         reg_data.eq(aud0vol.target),
+                    #         aud0vol.written.eq(aud0vol.target),
+                    #         config_state.eq(3),
+                    #         write_hold.eq(1),
+                    #     ]
                     with m.Case(3):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0LEN),
@@ -232,7 +238,7 @@ class PaulaTop(Elaboratable):
                     with m.Case(4):
                         m.d.sync += [
                             reg_addr.eq(self.AUD1PER),
-                            reg_data.eq(self.PAULA_PERIOD),
+                            reg_data.eq(self.PAULA_DFT_PERIOD),
                             config_state.eq(5),
                             write_hold.eq(1),
                         ]
@@ -254,11 +260,12 @@ class PaulaTop(Elaboratable):
                         ]
                     with m.Case(7):
                         with m.If(~pa_rst):
-                            with m.If(aud0vol_target != aud0vol_written):
+                            aud0vol = self.register_mappings["AUD0VOL"]
+                            with m.If(aud0vol.target != aud0vol.written):
                                 m.d.sync += [
                                     reg_addr.eq(self.AUD0VOL),
-                                    reg_data.eq(aud0vol_target),
-                                    aud0vol_written.eq(aud0vol_target),
+                                    reg_data.eq(aud0vol.target),
+                                    aud0vol.written.eq(aud0vol.target),
                                     write_hold.eq(1),
                                 ]
                             with m.Else():

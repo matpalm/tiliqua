@@ -1,4 +1,4 @@
-"""Minimal Paula bring-up with synthetic AUD0DAT feed (no capture path)."""
+"""Minimal Paula bring-up with internal triangle source for AUD0DAT."""
 
 from amaranth import *
 from amaranth.lib import cdc, wiring
@@ -24,7 +24,7 @@ class PaulaTop(Elaboratable):
     AUD0DAT = 0x55
 
     bitstream_help = BitstreamHelp(
-        brief="Paula tone bring-up (Paula path default)",
+        brief="Paula triangle-source bring-up",
         io_left=[
             "sample0 in",
             "sample1 in",
@@ -66,7 +66,6 @@ class PaulaTop(Elaboratable):
         reg_data = Signal(unsigned(16), init=0)
         reset_ctr = Signal(range(64), init=63)
         pa_rst = Signal()
-        tone_u8 = Signal(unsigned(8), init=0x80)
 
         # Paula timing strobes in sync domain.
         clk7_div = Signal(range(8), init=0)
@@ -75,21 +74,28 @@ class PaulaTop(Elaboratable):
         strhor_pulse = Signal(init=0)
         write_hold = Signal(range(2), init=0)
 
-        tone_word = Signal(unsigned(16))
+        sample_tick = Signal()
+        tri_s8 = Signal(signed(8), init=0)
+        tri_dir_up = Signal(init=1)
+        tri_direct = Signal(signed(ASQ.as_shape().width))
+        sample_word = Signal(unsigned(16))
         pa_l = Signal(signed(15))
         out_shift = max(ASQ.as_shape().width - 15, 0)
+        direct_shift = max(ASQ.as_shape().width - 8, 0)
         dbg_phase = Signal(unsigned(24), init=0)
         dbg_tone = Signal(signed(ASQ.as_shape().width))
 
         m.d.comb += [
             pmod0.o_cal.ready.eq(1),
             pmod0.i_cal.valid.eq(1),
-            tone_word.eq(Cat(tone_u8, tone_u8)),
+            sample_tick.eq(pmod0.o_cal.valid),
+            sample_word.eq(Cat(tri_s8.as_unsigned(), tri_s8.as_unsigned())),
+            tri_direct.eq(tri_s8 << direct_shift),
             pa_l.eq(paudio.ldata.as_signed()),
             pmod0.i_cal.payload[0]
             .as_value()
             .eq(Mux(self.BYPASS_PAULA_AUDIO, dbg_tone, pa_l << out_shift)),
-            pmod0.i_cal.payload[1].eq(0),
+            pmod0.i_cal.payload[1].as_value().eq(tri_direct),
             pmod0.i_cal.payload[2].eq(0),
             pmod0.i_cal.payload[3].eq(0),
             paudio.clk7_en.eq(clk7_en_pulse),
@@ -107,6 +113,24 @@ class PaulaTop(Elaboratable):
 
         m.d.sync += dbg_phase.eq(dbg_phase + 15000)
         m.d.comb += dbg_tone.eq(Mux(dbg_phase[-1], 12000, -12000))
+
+        with m.If(sample_tick):
+            with m.If(tri_dir_up):
+                with m.If(tri_s8 == 127):
+                    m.d.sync += [
+                        tri_s8.eq(126),
+                        tri_dir_up.eq(0),
+                    ]
+                with m.Else():
+                    m.d.sync += tri_s8.eq(tri_s8 + 1)
+            with m.Else():
+                with m.If(tri_s8 == -128):
+                    m.d.sync += [
+                        tri_s8.eq(-127),
+                        tri_dir_up.eq(1),
+                    ]
+                with m.Else():
+                    m.d.sync += tri_s8.eq(tri_s8 - 1)
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)
@@ -166,12 +190,11 @@ class PaulaTop(Elaboratable):
                             write_hold.eq(1),
                         ]
                     with m.Case(4):
-                        # Stream a synthetic waveform continuously (CPU mode by default).
+                        # Stream internal triangle waveform continuously (CPU mode).
                         with m.If(~pa_rst):
                             m.d.sync += [
                                 reg_addr.eq(self.AUD0DAT),
-                                reg_data.eq(tone_word),
-                                tone_u8.eq(tone_u8 + 1),
+                                reg_data.eq(sample_word),
                                 write_hold.eq(1),
                             ]
 

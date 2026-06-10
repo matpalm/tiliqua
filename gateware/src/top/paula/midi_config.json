@@ -1,0 +1,21 @@
+{
+  "midi_channel": 0,
+  "samples": [
+    {
+      "record_note": 44,
+      "play_note": 36
+    },
+    {
+      "record_note": 45,
+      "play_note": 37
+    }
+  ],
+  "paula_channels": [
+    {
+      "volume_cc": 10
+    },
+    {
+      "volume_cc": 74
+    }
+  ]
+}

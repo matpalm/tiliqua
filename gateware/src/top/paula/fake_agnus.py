@@ -66,21 +66,21 @@ class FakeAgnus(wiring.Component):
             )
 
         m.d.comb += [
-            # Write incoming sample words into ring buffers at sample tick rate.
+            # write incoming sample words into ring buffers at sample tick rate.
             wr0.en.eq(self.i_sample_tick),
             wr0.addr.eq(wr_ptr),
             wr0.data.eq(self.i_sample0_word),
             wr1.en.eq(self.i_sample_tick),
             wr1.addr.eq(wr_ptr),
             wr1.data.eq(self.i_sample1_word),
-            # Read side follows DMA-consumed pointers.
+            # read side follows DMA-consumed pointers.
             rd0.en.eq(1),
             rd0.addr.eq(rd_ptr0),
             rd1.en.eq(1),
             rd1.addr.eq(rd_ptr1),
             self.o_audio_data0.eq(rd0.data),
             self.o_audio_data1.eq(rd1.data),
-            # Grant immediately and ack restart requests.
+            # grant immediately and ack restart requests.
             self.o_audio_grant.eq(self.i_audio_dmal),
             self.o_audio_restart_ack.eq(self.i_audio_dmas),
             self.o_reg_read_data.eq(0),

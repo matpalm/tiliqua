@@ -1,9 +1,0 @@
-{ "samples": {
-    "midi": {
-        "channel": 0,
-        "slots": [
-            { "record_note": 44, "play_note": 36 },
-            { "record_note": 45, "play_note": 37 }
-        ]
-    }
-}}

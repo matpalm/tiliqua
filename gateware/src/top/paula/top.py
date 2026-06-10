@@ -56,16 +56,16 @@ class PaulaTop(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
-        cfg_path = Path(__file__).with_name("config.json")
+        cfg_path = Path(__file__).with_name("midi_config.json")
         with open(cfg_path, "r") as f:
-            cfg = json.loads(f.read())
-        midi_cfg = cfg["samples"]["midi"]
-        midi_channel = midi_cfg["channel"]
+            midi_cfg = json.loads(f.read())
 
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
 
-        m.submodules.midi_proc = midi_proc = MidiProcessing(midi_channel=midi_channel)
+        m.submodules.midi_proc = midi_proc = MidiProcessing(
+            midi_channel=midi_cfg["midi_channel"]
+        )
 
         m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
         m.submodules.pmod0 = pmod0 = eurorack_pmod.EurorackPmod(
@@ -79,12 +79,11 @@ class PaulaTop(Elaboratable):
 
         channels = []
         for ch in [0, 1]:
-            record_note = midi_cfg["slots"][ch]["record_note"]
-            play_note = midi_cfg["slots"][ch]["play_note"]
+            sample_cfg = midi_cfg["samples"][ch]
             channels.append(
                 Channel(
-                    record_note=record_note,
-                    play_note=play_note,
+                    record_note=sample_cfg["record_note"],
+                    play_note=sample_cfg["play_note"],
                 )
             )
         m.submodules += channels

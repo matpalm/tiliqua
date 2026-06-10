@@ -11,22 +11,24 @@ from sample import Sample
 
 class PaulaRecorderCore(wiring.Component):
 
-    cfg_path = Path(__file__).with_name("config.json")
-    with open(cfg_path, "r") as f:
-        cfg = json.loads(f.read())
-
-    MIDI_CHANNEL = cfg["samples"]["midi_channel"]
-    RECORD_NOTE0 = cfg["samples"]["slots"][0]["record_note"]
-    PLAY_NOTE0 = cfg["samples"]["slots"][0]["play_note"]
-    RECORD_NOTE1 = cfg["samples"]["slots"][1]["record_note"]
-    PLAY_NOTE1 = cfg["samples"]["slots"][1]["play_note"]
-
     i_midi: In(stream.Signature(midi.MidiMessage))
     i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
     o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
 
     def elaborate(self, platform):
         m = Module()
+
+        cfg_path = Path(__file__).with_name("config.json")
+        with open(cfg_path, "r") as f:
+            cfg = json.loads(f.read())
+        midi_cfg = cfg["samples"]["midi"]
+        MIDI_CHANNEL = midi_cfg["channel"]
+
+        def record_note(slot: int):
+            return midi_cfg["slots"][slot]["record_note"]
+
+        def play_note(slot: int):
+            return midi_cfg["slots"][slot]["play_note"]
 
         sample_accepted = Signal()
 
@@ -50,17 +52,17 @@ class PaulaRecorderCore(wiring.Component):
             msg = self.i_midi.payload
             with m.If(
                 (msg.status.kind == midi.Status.Kind.NOTE_ON)
-                & (msg.status.nibble.channel == self.MIDI_CHANNEL)
+                & (msg.status.nibble.channel == MIDI_CHANNEL)
                 & (msg.midi_payload.note_on.velocity != 0)
             ):
                 with m.Switch(msg.midi_payload.note_on.note):
-                    with m.Case(self.RECORD_NOTE0):
+                    with m.Case(record_note(0)):
                         m.d.comb += rec_evt0.eq(1)
-                    with m.Case(self.PLAY_NOTE0):
+                    with m.Case(play_note(0)):
                         m.d.comb += play_evt0.eq(1)
-                    with m.Case(self.RECORD_NOTE1):
+                    with m.Case(record_note(1)):
                         m.d.comb += rec_evt1.eq(1)
-                    with m.Case(self.PLAY_NOTE1):
+                    with m.Case(play_note(1)):
                         m.d.comb += play_evt1.eq(1)
 
         m.submodules.sample0 = sample0 = Sample()

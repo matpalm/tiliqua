@@ -63,8 +63,12 @@ class PaulaTop(Elaboratable):
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
 
+        # _target is latest known value. _written is last written.
+        aud0vol_target = Signal(range(65), init=64)
+        aud0vol_written = Signal(range(65), init=0)
+
         m.submodules.midi_proc = midi_proc = MidiProcessing(
-            midi_channel=midi_cfg["midi_channel"]
+            midi_channel=midi_cfg["midi_channel"], cc_mapping={10: aud0vol_target}
         )
 
         m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
@@ -213,7 +217,8 @@ class PaulaTop(Elaboratable):
                     with m.Case(2):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0VOL),
-                            reg_data.eq(64),
+                            reg_data.eq(aud0vol_target),
+                            aud0vol_written.eq(aud0vol_target),
                             config_state.eq(3),
                             write_hold.eq(1),
                         ]
@@ -249,38 +254,46 @@ class PaulaTop(Elaboratable):
                         ]
                     with m.Case(7):
                         with m.If(~pa_rst):
-                            with m.If(dma_prime_writes != 0):
-                                with m.If(dma_feed_sel == 0):
-                                    m.d.sync += [
-                                        reg_addr.eq(self.AUD0DAT),
-                                        reg_data.eq(fake_agnus.o_audio_data0),
-                                        write_hold.eq(1),
-                                        dma_prime_writes.eq(dma_prime_writes - 1),
-                                        dma_feed_sel.eq(1),
-                                    ]
-                                with m.Else():
-                                    m.d.sync += [
-                                        reg_addr.eq(self.AUD1DAT),
-                                        reg_data.eq(fake_agnus.o_audio_data1),
-                                        write_hold.eq(1),
-                                        dma_prime_writes.eq(dma_prime_writes - 1),
-                                        dma_feed_sel.eq(0),
-                                    ]
+                            with m.If(aud0vol_target != aud0vol_written):
+                                m.d.sync += [
+                                    reg_addr.eq(self.AUD0VOL),
+                                    reg_data.eq(aud0vol_target),
+                                    aud0vol_written.eq(aud0vol_target),
+                                    write_hold.eq(1),
+                                ]
                             with m.Else():
-                                with m.If(dma_feed_sel == 0):
-                                    m.d.sync += [
-                                        reg_addr.eq(self.AUD0DAT),
-                                        reg_data.eq(fake_agnus.o_audio_data0),
-                                        write_hold.eq(1),
-                                        dma_feed_sel.eq(1),
-                                    ]
+                                with m.If(dma_prime_writes != 0):
+                                    with m.If(dma_feed_sel == 0):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD0DAT),
+                                            reg_data.eq(fake_agnus.o_audio_data0),
+                                            write_hold.eq(1),
+                                            dma_prime_writes.eq(dma_prime_writes - 1),
+                                            dma_feed_sel.eq(1),
+                                        ]
+                                    with m.Else():
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD1DAT),
+                                            reg_data.eq(fake_agnus.o_audio_data1),
+                                            write_hold.eq(1),
+                                            dma_prime_writes.eq(dma_prime_writes - 1),
+                                            dma_feed_sel.eq(0),
+                                        ]
                                 with m.Else():
-                                    m.d.sync += [
-                                        reg_addr.eq(self.AUD1DAT),
-                                        reg_data.eq(fake_agnus.o_audio_data1),
-                                        write_hold.eq(1),
-                                        dma_feed_sel.eq(0),
-                                    ]
+                                    with m.If(dma_feed_sel == 0):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD0DAT),
+                                            reg_data.eq(fake_agnus.o_audio_data0),
+                                            write_hold.eq(1),
+                                            dma_feed_sel.eq(1),
+                                        ]
+                                    with m.Else():
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD1DAT),
+                                            reg_data.eq(fake_agnus.o_audio_data1),
+                                            write_hold.eq(1),
+                                            dma_feed_sel.eq(0),
+                                        ]
 
         return m
 

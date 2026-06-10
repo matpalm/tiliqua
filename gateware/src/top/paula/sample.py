@@ -23,9 +23,6 @@ class Sample(wiring.Component):
     CAPTURE_EDGE = CAPTURE_DENOM - CAPTURE_NUM
     MAX_CAPTURE_SAMPLES = RECORD_SECONDS * CAPTURE_FREQ
 
-    # INPUT_WIDTH = Dither8BitQuantiser.INPUT_WIDTH
-    # TRUNC_SHIFT = Dither8BitQuantiser.TRUNC_SHIFT
-
     i_sample: In(ASQ)
     sample_tick: In(1)
     record_toggle_evt: In(1)
@@ -42,6 +39,8 @@ class Sample(wiring.Component):
         rd = sample_mem.read_port()
 
         recording = Signal(init=0)
+        pending_record_start = Signal(init=0)
+        pending_record_stop = Signal(init=0)
         valid_length = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
         write_addr = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
 
@@ -54,6 +53,8 @@ class Sample(wiring.Component):
         m.submodules.dither = dither = Dither8BitQuantiser()
 
         sample_in = Signal(signed(dither.INPUT_WIDTH))
+        last_sample = Signal(signed(dither.INPUT_WIDTH), init=0)
+        positive_zero_cross = Signal()
 
         do_write = Signal()
         do_capture_strobe = Signal()
@@ -69,6 +70,9 @@ class Sample(wiring.Component):
             sample_in.eq(self.i_sample.as_value()),
             dither.i_sample.eq(sample_in),
             dither.tick.eq(self.sample_tick),
+            positive_zero_cross.eq(
+                self.sample_tick & (last_sample <= 0) & (sample_in > 0)
+            ),
         ]
 
         with m.If(play_state == self.PlayState.PLAY):
@@ -107,17 +111,16 @@ class Sample(wiring.Component):
 
         with m.If(self.record_toggle_evt):
             with m.If(recording):
-                m.d.sync += recording.eq(0)
+                # Stop on next positive crossing.
+                m.d.sync += pending_record_stop.eq(1)
+            with m.Elif(pending_record_start):
+                # Toggle again before crossing cancels pending start.
+                m.d.sync += pending_record_start.eq(0)
             with m.Else():
+                # Start on next positive crossing.
                 m.d.sync += [
-                    recording.eq(1),
-                    write_addr.eq(0),
-                    valid_length.eq(0),
-                    decim_acc.eq(0),
-                    play_state.eq(self.PlayState.IDLE),
-                    play_addr.eq(0),
-                    play_count.eq(0),
-                    play_acc.eq(0),
+                    pending_record_start.eq(1),
+                    pending_record_stop.eq(0),
                 ]
         with m.Elif(self.playback_evt):
             # Toggle playback: if active, stop; if idle and data exists, start.
@@ -131,11 +134,35 @@ class Sample(wiring.Component):
             with m.Elif(valid_length != 0):
                 m.d.sync += [
                     recording.eq(0),
+                    pending_record_start.eq(0),
+                    pending_record_stop.eq(0),
                     play_state.eq(self.PlayState.PREFETCH),
                     play_addr.eq(0),
                     play_count.eq(0),
                     play_acc.eq(0),
                 ]
+
+        with m.If(positive_zero_cross):
+            with m.If(pending_record_stop & recording):
+                m.d.sync += [
+                    recording.eq(0),
+                    pending_record_stop.eq(0),
+                ]
+            with m.Elif(pending_record_start & ~recording):
+                m.d.sync += [
+                    recording.eq(1),
+                    pending_record_start.eq(0),
+                    write_addr.eq(0),
+                    valid_length.eq(0),
+                    decim_acc.eq(0),
+                    play_state.eq(self.PlayState.IDLE),
+                    play_addr.eq(0),
+                    play_count.eq(0),
+                    play_acc.eq(0),
+                ]
+
+        with m.If(self.sample_tick):
+            m.d.sync += last_sample.eq(sample_in)
 
         with m.If(do_record_input):
             with m.If(do_capture_strobe):
@@ -149,7 +176,10 @@ class Sample(wiring.Component):
                 valid_length.eq(write_addr + 1),
             ]
             with m.If((write_addr + 1) >= self.MAX_CAPTURE_SAMPLES):
-                m.d.sync += recording.eq(0)
+                m.d.sync += [
+                    recording.eq(0),
+                    pending_record_stop.eq(0),
+                ]
 
         with m.If(do_prefetch):
             m.d.sync += [

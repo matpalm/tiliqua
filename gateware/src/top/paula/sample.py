@@ -5,7 +5,7 @@ from amaranth.lib.wiring import In, Out
 from math import gcd
 
 from tiliqua.dsp import ASQ
-
+from dither import Dither8BitQuantiser
 
 class Sample(wiring.Component):
 
@@ -22,6 +22,9 @@ class Sample(wiring.Component):
     CAPTURE_DENOM = INPUT_FREQ // _FREQ_GCD
     CAPTURE_EDGE = CAPTURE_DENOM - CAPTURE_NUM
     MAX_CAPTURE_SAMPLES = RECORD_SECONDS * CAPTURE_FREQ
+
+    # INPUT_WIDTH = Dither8BitQuantiser.INPUT_WIDTH
+    # TRUNC_SHIFT = Dither8BitQuantiser.TRUNC_SHIFT
 
     i_sample: In(ASQ)
     sample_tick: In(1)
@@ -47,11 +50,12 @@ class Sample(wiring.Component):
         play_count = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
         play_acc = Signal(range(self.CAPTURE_DENOM), init=0)
 
-        # Deterministic phase for 48 kHz -> 22 kHz
+        # Deterministic phase for 48 kHz -> 16726 Hz
         decim_acc = Signal(range(self.CAPTURE_DENOM), init=0)
 
-        sample_i16 = Signal(signed(ASQ.as_shape().width))
-        sample_q8 = Signal(signed(8))
+        m.submodules.dither = dither = Dither8BitQuantiser()
+
+        sample_in = Signal(signed(dither.INPUT_WIDTH))
 
         do_write = Signal()
         do_capture_strobe = Signal()
@@ -64,12 +68,13 @@ class Sample(wiring.Component):
 
         m.d.comb += [
             self.o_sample.eq(0),
-            sample_i16.eq(self.i_sample.as_value()),
-            sample_q8.eq(sample_i16 >> 8),
+            sample_in.eq(self.i_sample.as_value()),
+            dither.i_sample.eq(sample_in),
+            dither.tick.eq(self.sample_tick),
         ]
 
         with m.If(play_state == self.PlayState.PLAY):
-            m.d.comb += self.o_sample.as_value().eq(rd.data << 8)
+            m.d.comb += self.o_sample.as_value().eq(rd.data << dither.TRUNC_SHIFT)
 
         m.d.comb += [
             do_record_input.eq(
@@ -82,7 +87,7 @@ class Sample(wiring.Component):
             do_write.eq(do_capture_strobe & (write_addr < self.MAX_CAPTURE_SAMPLES)),
             wr.en.eq(do_write),
             wr.addr.eq(write_addr),
-            wr.data.eq(sample_q8),
+            wr.data.eq(dither.o_sample_q8),
             do_prefetch.eq(
                 self.sample_tick
                 & (play_state == self.PlayState.PREFETCH)

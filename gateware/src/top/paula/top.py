@@ -3,8 +3,8 @@ Paula recorder/playback scaffold using on-chip EBR.
 
 Implements two independent mono sampler paths:
 
-Recording is deterministically decimated from 48 kHz input to 22 kHz
-capture rate using a fixed  phase accumulator.
+Recording is deterministically decimated from 48 kHz input to 16726 Hz
+capture rate using a fixed phase accumulator.
 """
 
 from amaranth import *

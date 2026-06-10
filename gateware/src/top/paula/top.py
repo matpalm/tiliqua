@@ -1,9 +1,12 @@
-"""Minimal Paula bring-up with live in0 source for AUD0DAT."""
+"""Paula Sample-core loop controlled by MIDI record/play notes."""
+
+import json
+from pathlib import Path
 
 from amaranth import *
-from amaranth.lib import cdc, wiring
-from amaranth.lib.memory import Memory
+from amaranth.lib import wiring
 
+from tiliqua import midi
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ
@@ -12,10 +15,10 @@ from tiliqua.platform import RebootProvider
 
 from fake_agnus import FakeAgnus
 from paula_audio_wrapper import PaulaAudioWrapper
+from sample import Sample
 
 class PaulaTop(Elaboratable):
 
-    SAMPLE_COUNT = 2048
     PAULA_PERIOD = 124
     USE_FAKE_AGNUS_DMA = True
 
@@ -25,7 +28,7 @@ class PaulaTop(Elaboratable):
     AUD0DAT = 0x55
 
     bitstream_help = BitstreamHelp(
-        brief="Paula capture/freeze loop (Fake Agnus DMA optional)",
+        brief="Paula Sample-core loop (MIDI note control)",
         io_left=[
             "sample0 in",
             "sample1 in",
@@ -46,40 +49,41 @@ class PaulaTop(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
+        cfg_path = Path(__file__).with_name("config.json")
+        with open(cfg_path, "r") as f:
+            cfg = json.loads(f.read())
+        midi_cfg = cfg["samples"]["midi"]
+        midi_channel = midi_cfg["channel"]
+        record_note = midi_cfg["slots"][0]["record_note"]
+        play_note = midi_cfg["slots"][0]["play_note"]
+
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
-        m.submodules.btn = cdc.FFSynchronizer(
-            platform.request("encoder").s.i, reboot.button
+
+        midi_pins = platform.request("midi")
+        m.submodules.serialrx = serialrx = midi.SerialRx(
+            system_clk_hz=60e6, pins=midi_pins
         )
+        m.submodules.midi_decode = midi_decode = midi.MidiDecodeSerial()
+        wiring.connect(m, serialrx.o, midi_decode.i)
 
         m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
         m.submodules.pmod0 = pmod0 = eurorack_pmod.EurorackPmod(
             self.clock_settings.audio_clock
         )
         wiring.connect(m, pmod0.pins, pmod0_provider.pins)
-        # Keep codec forced unmuted during Paula bring-up.
         m.d.comb += pmod0.codec_mute.eq(0)
 
         m.submodules.fake_agnus = fake_agnus = FakeAgnus()
         m.submodules.paudio = paudio = PaulaAudioWrapper()
+        m.submodules.sample0 = sample0 = Sample()
 
         config_state = Signal(unsigned(3), init=0)
         reg_addr = Signal(unsigned(8), init=0)
         reg_data = Signal(unsigned(16), init=0)
         reset_ctr = Signal(range(64), init=63)
         pa_rst = Signal()
-        record_en = Signal(init=1)
-        btn_prev = Signal(init=0)
 
-        m.submodules.sample_mem = sample_mem = Memory(
-            shape=signed(8), depth=self.SAMPLE_COUNT, init=[]
-        )
-        wr = sample_mem.write_port()
-        rd = sample_mem.read_port()
-        wr_ptr = Signal(range(self.SAMPLE_COUNT), init=0)
-        rd_ptr = Signal(range(self.SAMPLE_COUNT), init=0)
-
-        # Paula timing strobes in sync domain.
         clk7_div = Signal(range(8), init=0)
         clk7_en_pulse = Signal(init=0)
         strhor_div = Signal(range(480), init=0)
@@ -88,11 +92,13 @@ class PaulaTop(Elaboratable):
         dma_prime_writes = Signal(range(8), init=0)
 
         sample_tick = Signal()
+        rec_evt = Signal()
+        play_evt = Signal()
         in0_sample = Signal(signed(ASQ.as_shape().width))
         sample_shift = max(ASQ.as_shape().width - 8, 0)
         in0_s8 = Signal(signed(8))
+        sample0_s8 = Signal(signed(8))
         in0_direct = Signal(signed(ASQ.as_shape().width))
-        loop_s8 = Signal(signed(8))
         sample_word = Signal(unsigned(16))
         pa_l = Signal(signed(15))
         out_shift = max(ASQ.as_shape().width - 15, 0)
@@ -104,8 +110,8 @@ class PaulaTop(Elaboratable):
             sample_tick.eq(pmod0.o_cal.valid),
             in0_sample.eq(pmod0.o_cal.payload[0].as_value()),
             in0_s8.eq(in0_sample >> sample_shift),
-            loop_s8.eq(rd.data),
-            sample_word.eq(Cat(loop_s8.as_unsigned(), loop_s8.as_unsigned())),
+            sample0_s8.eq(sample0.o_sample.as_value() >> sample_shift),
+            sample_word.eq(Cat(sample0_s8.as_unsigned(), sample0_s8.as_unsigned())),
             in0_direct.eq(in0_s8 << direct_shift),
             pa_l.eq(paudio.ldata.as_signed()),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
@@ -135,33 +141,29 @@ class PaulaTop(Elaboratable):
             fake_agnus.i_reg_write.eq(reg_addr != 0),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
-            wr.en.eq(sample_tick & record_en),
-            wr.addr.eq(wr_ptr),
-            wr.data.eq(in0_s8),
-            rd.en.eq(1),
-            rd.addr.eq(rd_ptr),
+            sample0.i_sample.eq(in0_sample),
+            sample0.sample_tick.eq(sample_tick),
+            sample0.record_toggle_evt.eq(rec_evt),
+            sample0.playback_evt.eq(play_evt),
+            midi_decode.o.ready.eq(1),
+            rec_evt.eq(0),
+            play_evt.eq(0),
         ]
 
-        with m.If(sample_tick):
-            with m.If(wr_ptr == (self.SAMPLE_COUNT - 1)):
-                m.d.sync += wr_ptr.eq(0)
-            with m.Else():
-                m.d.sync += wr_ptr.eq(wr_ptr + 1)
-
-            with m.If(rd_ptr == (self.SAMPLE_COUNT - 1)):
-                m.d.sync += rd_ptr.eq(0)
-            with m.Else():
-                m.d.sync += rd_ptr.eq(rd_ptr + 1)
-
-        # Press encoder button to toggle record/freeze mode.
-        with m.If(btn_prev == 0):
-            with m.If(reboot.button):
-                m.d.sync += record_en.eq(~record_en)
-        m.d.sync += btn_prev.eq(reboot.button)
+        with m.If(midi_decode.o.valid):
+            msg = midi_decode.o.payload
+            with m.If(
+                (msg.status.kind == midi.Status.Kind.NOTE_ON)
+                & (msg.status.nibble.channel == midi_channel)
+                & (msg.midi_payload.note_on.velocity != 0)
+            ):
+                with m.If(msg.midi_payload.note_on.note == record_note):
+                    m.d.comb += rec_evt.eq(1)
+                with m.Elif(msg.midi_payload.note_on.note == play_note):
+                    m.d.comb += play_evt.eq(1)
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)
-
         with m.Elif(config_state == 0):
             m.d.sync += config_state.eq(1)
 
@@ -212,13 +214,12 @@ class PaulaTop(Elaboratable):
                     with m.Case(3):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0LEN),
-                            reg_data.eq(self.SAMPLE_COUNT),
+                            reg_data.eq(Sample.MAX_CAPTURE_SAMPLES),
                             config_state.eq(4),
                             write_hold.eq(1),
                             dma_prime_writes.eq(Mux(self.USE_FAKE_AGNUS_DMA, 4, 0)),
                         ]
                     with m.Case(4):
-                        # Stream live in0-derived waveform (CPU mode) or buffered Fake Agnus DMA data.
                         with m.If(~pa_rst):
                             with m.If(self.USE_FAKE_AGNUS_DMA):
                                 with m.If(dma_prime_writes != 0):

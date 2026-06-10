@@ -7,7 +7,7 @@ from pathlib import Path
 from tiliqua import midi
 from tiliqua.dsp import ASQ
 
-from sample import Sample
+from paula_instance import PaulaInstance
 
 class PaulaRecorderCore(wiring.Component):
 
@@ -65,20 +65,18 @@ class PaulaRecorderCore(wiring.Component):
                     with m.Case(play_note(1)):
                         m.d.comb += play_evt1.eq(1)
 
-        m.submodules.sample0 = sample0 = Sample()
-        m.submodules.sample1 = sample1 = Sample()
+        m.submodules.paula = paula = PaulaInstance()
 
         m.d.comb += [
-            sample0.i_sample.eq(self.i.payload[0]),
-            sample0.sample_tick.eq(sample_accepted),
-            sample0.record_toggle_evt.eq(rec_evt0),
-            sample0.playback_evt.eq(play_evt0),
-            sample1.i_sample.eq(self.i.payload[1]),
-            sample1.sample_tick.eq(sample_accepted),
-            sample1.record_toggle_evt.eq(rec_evt1),
-            sample1.playback_evt.eq(play_evt1),
-            self.o.payload[0].eq(sample0.o_sample),
-            self.o.payload[1].eq(sample1.o_sample),
+            paula.i_sample0.eq(self.i.payload[0]),
+            paula.i_sample1.eq(self.i.payload[1]),
+            paula.sample_tick.eq(sample_accepted),
+            paula.i_record_evt0.eq(rec_evt0),
+            paula.i_record_evt1.eq(rec_evt1),
+            paula.i_play_evt0.eq(play_evt0),
+            paula.i_play_evt1.eq(play_evt1),
+            self.o.payload[0].eq(paula.o_sample0),
+            self.o.payload[1].eq(paula.o_sample1),
             self.o.payload[2].eq(0),
             self.o.payload[3].eq(0),
         ]

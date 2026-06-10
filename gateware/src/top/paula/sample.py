@@ -25,8 +25,6 @@ class Sample(wiring.Component):
     CAPTURE_DENOM = INPUT_FREQ // _FREQ_GCD
     CAPTURE_EDGE = CAPTURE_DENOM - CAPTURE_NUM
     MAX_CAPTURE_SAMPLES = RECORD_SECONDS * CAPTURE_FREQ
-    GAIN_MAX = 255
-    GAIN_STEP = 8  # 32-sample fade at 48 kHz (approx)
 
     i_sample: In(ASQ)
     sample_tick: In(1)
@@ -61,9 +59,6 @@ class Sample(wiring.Component):
 
         sample_in = Signal(signed(dither.INPUT_WIDTH))
         raw_out = Signal(signed(dither.INPUT_WIDTH))
-        gain = Signal(unsigned(8), init=0)
-        scaled_mul = Signal(signed(dither.INPUT_WIDTH + 8))
-        scaled_out = Signal(signed(dither.INPUT_WIDTH))
         play_sample = Signal(signed(dither.INPUT_WIDTH))
         last_play_sample = Signal(signed(dither.INPUT_WIDTH), init=0)
         play_positive_zero_cross = Signal()
@@ -84,9 +79,7 @@ class Sample(wiring.Component):
             raw_out.eq(0),
             sample_in.eq(self.i_sample.as_value()),
             play_sample.eq(rd.data << dither.TRUNC_SHIFT),
-            scaled_mul.eq(raw_out * gain),
-            scaled_out.eq(scaled_mul >> 8),
-            led_lp.i_sample.eq(scaled_out),
+            led_lp.i_sample.eq(raw_out),
             led_lp.tick.eq(self.sample_tick),
             self.o_sample.as_value().eq(led_lp.o_sample),
             dither.i_sample.eq(sample_in),
@@ -205,17 +198,6 @@ class Sample(wiring.Component):
             ]
             with m.If(play_state == self.PlayState.PLAY):
                 m.d.sync += last_played_sample.eq(play_sample)
-
-            with m.If((play_state != self.PlayState.IDLE) & ~pending_play_stop):
-                with m.If(gain <= (self.GAIN_MAX - self.GAIN_STEP)):
-                    m.d.sync += gain.eq(gain + self.GAIN_STEP)
-                with m.Else():
-                    m.d.sync += gain.eq(self.GAIN_MAX)
-            with m.Else():
-                with m.If(gain >= self.GAIN_STEP):
-                    m.d.sync += gain.eq(gain - self.GAIN_STEP)
-                with m.Else():
-                    m.d.sync += gain.eq(0)
 
         with m.If(do_record_input):
             with m.If(do_capture_strobe):

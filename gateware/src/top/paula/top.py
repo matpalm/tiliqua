@@ -20,9 +20,7 @@ from sample import Sample
 
 class PaulaTop(Elaboratable):
 
-    PAULA_DFT_PERIOD = 124
-    PAULA_MINUS_ONE_OCTAVE = PAULA_DFT_PERIOD // 2
-    PAULA_PLUS_ONE_OCTAVE = PAULA_DFT_PERIOD * 2
+    PAULA_DFT_PERIOD = 248
 
     # TODO: if going to 3 channels, move these register defns in channel.py
 
@@ -108,6 +106,7 @@ class PaulaTop(Elaboratable):
         # paula register address and data buses
         reg_addr = Signal(unsigned(8), init=0)
         reg_data = Signal(unsigned(16), init=0)
+        reg_write = Signal(init=0)
         # keep paula reset for initial cycles
         reset_ctr = Signal(range(64), init=63)
         # paula reset signal
@@ -119,13 +118,24 @@ class PaulaTop(Elaboratable):
         clk7_en_pulse = Signal(init=0)
         # divider for horizontal strobe timing
         strhor_div = Signal(range(480), init=0)
-        # one-cycle horizontal strobe pulse
+        # horizontal strobe aligned with the active clk7_en cycle
         strhor_pulse = Signal(init=0)
         # spacing between register writes
         write_hold = Signal(range(2), init=0)
         # num startup AUD0DAT prime writes to do
         dma_prime_writes = Signal(range(16), init=0)
         dma_feed_sel = Signal(init=0)
+        dma_req_pending = Signal(unsigned(2), init=0)
+        dma_idle_ctr = Signal(range(32), init=0)
+        dma_idle_kick_done = Signal(init=0)
+        saw_any_dmas = Signal(init=0)
+        saw_any_dmal = Signal(init=0)
+        dbg_aud0dat_wr_count = Signal(unsigned(24), init=0)
+        dbg_fallback_hold = Signal(range(1024), init=0)
+        dbg_tone_ctr = Signal(unsigned(16), init=0)
+        dbg_out1 = Signal(unsigned(15))
+        dbg_out2 = Signal(unsigned(15))
+        dbg_out3 = Signal(unsigned(15))
 
         # Audio rate handshake pulse.
         sample_tick = Signal()
@@ -145,11 +155,32 @@ class PaulaTop(Elaboratable):
             sample_tick.eq(pmod0.o_cal.valid),
             pa_l.eq(paudio.ldata.as_signed()),
             pa_r.eq(paudio.rdata.as_signed()),
+            dbg_out1.eq(
+                Mux(
+                    saw_any_dmas,
+                    Mux(dbg_tone_ctr[8], C(0x3FFF, 15), C(0, 15)),
+                    C(0, 15),
+                )
+            ),
+            dbg_out2.eq(
+                Mux(
+                    saw_any_dmal,
+                    Mux(dbg_tone_ctr[8], C(0x3FFF, 15), C(0, 15)),
+                    C(0, 15),
+                )
+            ),
+            dbg_out3.eq(
+                Mux(
+                    dbg_fallback_hold != 0,
+                    Mux(dbg_tone_ctr[8], C(0x3FFF, 15), C(0, 15)),
+                    C(0, 15),
+                )
+            ),
             pa_rst.eq(reset_ctr != 0),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
-            pmod0.i_cal.payload[1].as_value().eq(pa_r << out_shift),
-            pmod0.i_cal.payload[2].eq(0),
-            pmod0.i_cal.payload[3].eq(0),
+            pmod0.i_cal.payload[1].as_value().eq(dbg_out1 << out_shift),
+            pmod0.i_cal.payload[2].as_value().eq(dbg_out2 << out_shift),
+            pmod0.i_cal.payload[3].as_value().eq(dbg_out3 << out_shift),
             paudio.clk7_en.eq(clk7_en_pulse),
             paudio.cck.eq(clk7_en_pulse),
             paudio.rst.eq(pa_rst),
@@ -170,9 +201,10 @@ class PaulaTop(Elaboratable):
             fake_agnus.i_sample_tick.eq(sample_tick),
             fake_agnus.i_sample0_word.eq(channels[0].o_sample_word),
             fake_agnus.i_sample1_word.eq(channels[1].o_sample_word),
-            fake_agnus.i_reg_write.eq(reg_addr != 0),
+            fake_agnus.i_reg_write.eq(reg_write),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
+            strhor_pulse.eq(clk7_en_pulse & (strhor_div == 479)),
         ]
 
         for ch in [0, 1]:
@@ -201,19 +233,39 @@ class PaulaTop(Elaboratable):
 
         with m.If(clk7_en_pulse):
             with m.If(strhor_div == 479):
-                m.d.sync += [
-                    strhor_div.eq(0),
-                    strhor_pulse.eq(1),
-                ]
+                m.d.sync += strhor_div.eq(0)
             with m.Else():
-                m.d.sync += [
-                    strhor_div.eq(strhor_div + 1),
-                    strhor_pulse.eq(0),
-                ]
-        with m.Else():
-            m.d.sync += strhor_pulse.eq(0)
+                m.d.sync += strhor_div.eq(strhor_div + 1)
+
+        with m.If(sample_tick):
+            m.d.sync += dbg_tone_ctr.eq(dbg_tone_ctr + 1)
+        with m.If(sample_tick & (dbg_fallback_hold != 0)):
+            m.d.sync += dbg_fallback_hold.eq(dbg_fallback_hold - 1)
 
         with m.If(clk7_en_pulse):
+            # Default to no register write unless asserted below.
+            m.d.sync += [
+                reg_addr.eq(0),
+                reg_data.eq(0),
+                reg_write.eq(0),
+            ]
+
+            with m.If(pa_rst):
+                m.d.sync += [
+                    dma_req_pending.eq(0),
+                    dma_idle_kick_done.eq(0),
+                    saw_any_dmas.eq(0),
+                    saw_any_dmal.eq(0),
+                ]
+            with m.Else():
+                m.d.sync += dma_req_pending.eq(
+                    dma_req_pending | Cat(paudio.dmal[0], paudio.dmal[1])
+                )
+                with m.If(paudio.dmas != 0):
+                    m.d.sync += saw_any_dmas.eq(1)
+                with m.If(paudio.dmal != 0):
+                    m.d.sync += saw_any_dmal.eq(1)
+
             with m.If(write_hold != 0):
                 m.d.sync += write_hold.eq(write_hold - 1)
             with m.Else():
@@ -222,6 +274,7 @@ class PaulaTop(Elaboratable):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0PER),
                             reg_data.eq(self.PAULA_DFT_PERIOD),
+                            reg_write.eq(1),
                             config_state.eq(2),
                             write_hold.eq(1),
                         ]
@@ -229,6 +282,7 @@ class PaulaTop(Elaboratable):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0VOL),
                             reg_data.eq(64),
+                            reg_write.eq(1),
                             config_state.eq(3),
                             write_hold.eq(1),
                         ]
@@ -236,6 +290,7 @@ class PaulaTop(Elaboratable):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0LEN),
                             reg_data.eq(Sample.MAX_CAPTURE_SAMPLES),
+                            reg_write.eq(1),
                             config_state.eq(4),
                             write_hold.eq(1),
                         ]
@@ -243,6 +298,7 @@ class PaulaTop(Elaboratable):
                         m.d.sync += [
                             reg_addr.eq(self.AUD1PER),
                             reg_data.eq(self.PAULA_DFT_PERIOD),
+                            reg_write.eq(1),
                             config_state.eq(5),
                             write_hold.eq(1),
                         ]
@@ -250,6 +306,7 @@ class PaulaTop(Elaboratable):
                         m.d.sync += [
                             reg_addr.eq(self.AUD1VOL),
                             reg_data.eq(64),
+                            reg_write.eq(1),
                             config_state.eq(6),
                             write_hold.eq(1),
                         ]
@@ -257,6 +314,7 @@ class PaulaTop(Elaboratable):
                         m.d.sync += [
                             reg_addr.eq(self.AUD1LEN),
                             reg_data.eq(Sample.MAX_CAPTURE_SAMPLES),
+                            reg_write.eq(1),
                             config_state.eq(7),
                             write_hold.eq(1),
                             dma_prime_writes.eq(8),
@@ -270,6 +328,7 @@ class PaulaTop(Elaboratable):
                                 m.d.sync += [
                                     reg_addr.eq(self.AUD0VOL),
                                     reg_data.eq(aud0vol.target),
+                                    reg_write.eq(1),
                                     aud0vol.written.eq(aud0vol.target),
                                     write_hold.eq(1),
                                 ]
@@ -277,6 +336,7 @@ class PaulaTop(Elaboratable):
                                 m.d.sync += [
                                     reg_addr.eq(self.AUD1VOL),
                                     reg_data.eq(aud1vol.target),
+                                    reg_write.eq(1),
                                     aud1vol.written.eq(aud1vol.target),
                                     write_hold.eq(1),
                                 ]
@@ -286,6 +346,11 @@ class PaulaTop(Elaboratable):
                                         m.d.sync += [
                                             reg_addr.eq(self.AUD0DAT),
                                             reg_data.eq(fake_agnus.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dbg_aud0dat_wr_count.eq(
+                                                dbg_aud0dat_wr_count + 1
+                                            ),
+                                            dma_idle_ctr.eq(0),
                                             write_hold.eq(1),
                                             dma_prime_writes.eq(dma_prime_writes - 1),
                                             dma_feed_sel.eq(1),
@@ -294,25 +359,103 @@ class PaulaTop(Elaboratable):
                                         m.d.sync += [
                                             reg_addr.eq(self.AUD1DAT),
                                             reg_data.eq(fake_agnus.o_audio_data1),
+                                            reg_write.eq(1),
+                                            dma_idle_ctr.eq(0),
                                             write_hold.eq(1),
                                             dma_prime_writes.eq(dma_prime_writes - 1),
                                             dma_feed_sel.eq(0),
                                         ]
                                 with m.Else():
-                                    with m.If(dma_feed_sel == 0):
+                                    with m.If(
+                                        (dma_req_pending[0] == 1)
+                                        & (dma_req_pending[1] == 1)
+                                    ):
+                                        with m.If(dma_feed_sel == 0):
+                                            m.d.sync += [
+                                                reg_addr.eq(self.AUD0DAT),
+                                                reg_data.eq(fake_agnus.o_audio_data0),
+                                                reg_write.eq(1),
+                                                dbg_aud0dat_wr_count.eq(
+                                                    dbg_aud0dat_wr_count + 1
+                                                ),
+                                                dma_idle_ctr.eq(0),
+                                                dma_req_pending[0].eq(0),
+                                                dma_feed_sel.eq(1),
+                                                write_hold.eq(1),
+                                            ]
+                                        with m.Else():
+                                            m.d.sync += [
+                                                reg_addr.eq(self.AUD1DAT),
+                                                reg_data.eq(fake_agnus.o_audio_data1),
+                                                reg_write.eq(1),
+                                                dma_idle_ctr.eq(0),
+                                                dma_req_pending[1].eq(0),
+                                                dma_feed_sel.eq(0),
+                                                write_hold.eq(1),
+                                            ]
+                                    with m.Elif(dma_req_pending[0] == 1):
                                         m.d.sync += [
                                             reg_addr.eq(self.AUD0DAT),
                                             reg_data.eq(fake_agnus.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dbg_aud0dat_wr_count.eq(
+                                                dbg_aud0dat_wr_count + 1
+                                            ),
+                                            dma_idle_ctr.eq(0),
+                                            dma_req_pending[0].eq(0),
                                             write_hold.eq(1),
-                                            dma_feed_sel.eq(1),
                                         ]
-                                    with m.Else():
+                                    with m.Elif(dma_req_pending[1] == 1):
                                         m.d.sync += [
                                             reg_addr.eq(self.AUD1DAT),
                                             reg_data.eq(fake_agnus.o_audio_data1),
+                                            reg_write.eq(1),
+                                            dma_idle_ctr.eq(0),
+                                            dma_req_pending[1].eq(0),
                                             write_hold.eq(1),
-                                            dma_feed_sel.eq(0),
                                         ]
+                                    with m.Else():
+                                        # One-shot startup kick if no DMA requests are observed.
+                                        with m.If(
+                                            (dma_idle_ctr == 31)
+                                            & (~saw_any_dmal)
+                                            & (~dma_idle_kick_done)
+                                        ):
+                                            with m.If(dma_feed_sel == 0):
+                                                m.d.sync += [
+                                                    reg_addr.eq(self.AUD0DAT),
+                                                    reg_data.eq(
+                                                        fake_agnus.o_audio_data0
+                                                    ),
+                                                    reg_write.eq(1),
+                                                    dbg_aud0dat_wr_count.eq(
+                                                        dbg_aud0dat_wr_count + 1
+                                                    ),
+                                                    dma_feed_sel.eq(1),
+                                                    dma_idle_kick_done.eq(1),
+                                                    dma_idle_ctr.eq(0),
+                                                    dbg_fallback_hold.eq(1023),
+                                                    write_hold.eq(1),
+                                                ]
+                                            with m.Else():
+                                                m.d.sync += [
+                                                    reg_addr.eq(self.AUD1DAT),
+                                                    reg_data.eq(
+                                                        fake_agnus.o_audio_data1
+                                                    ),
+                                                    reg_write.eq(1),
+                                                    dma_feed_sel.eq(0),
+                                                    dma_idle_kick_done.eq(1),
+                                                    dma_idle_ctr.eq(0),
+                                                    dbg_fallback_hold.eq(1023),
+                                                    write_hold.eq(1),
+                                                ]
+                                        with m.Elif(dma_idle_ctr == 31):
+                                            m.d.sync += dma_idle_ctr.eq(0)
+                                        with m.Else():
+                                            m.d.sync += dma_idle_ctr.eq(
+                                                dma_idle_ctr + 1
+                                            )
 
         return m
 

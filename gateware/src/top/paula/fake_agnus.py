@@ -7,6 +7,9 @@ class FakeAgnus(wiring.Component):
 
     # TODO: if we go to 3 channel processing let's introduce arrays
 
+    AUD0DAT = 0x55
+    AUD1DAT = 0x5D
+
     BUFFER_DEPTH = 2048
 
     i_audio_dmal: In(unsigned(2))
@@ -53,14 +56,30 @@ class FakeAgnus(wiring.Component):
         with m.If(self.i_audio_dmas[1]):
             m.d.sync += rd_ptr1.eq(wr_ptr)
 
-        with m.If(self.i_sample_tick):
+        dat0_write = Signal()
+        dat1_write = Signal()
+        dat0_write_prev = Signal(init=0)
+        dat1_write_prev = Signal(init=0)
+        dat0_write_edge = Signal()
+        dat1_write_edge = Signal()
+
+        m.d.comb += [
+            dat0_write.eq(self.i_reg_write & (self.i_reg_addr == self.AUD0DAT)),
+            dat1_write.eq(self.i_reg_write & (self.i_reg_addr == self.AUD1DAT)),
+            dat0_write_edge.eq(dat0_write & ~dat0_write_prev),
+            dat1_write_edge.eq(dat1_write & ~dat1_write_prev),
+        ]
+
+        m.d.sync += [
+            dat0_write_prev.eq(dat0_write),
+            dat1_write_prev.eq(dat1_write),
+        ]
+
+        with m.If(dat0_write_edge):
             m.d.sync += rd_ptr0.eq(
                 Mux(rd_ptr0 == (self.BUFFER_DEPTH - 1), 0, rd_ptr0 + 1)
             )
-            m.d.sync += rd_ptr1.eq(
-                Mux(rd_ptr1 == (self.BUFFER_DEPTH - 1), 0, rd_ptr1 + 1)
-            )
-        with m.Elif(self.o_audio_grant[1]):
+        with m.If(dat1_write_edge):
             m.d.sync += rd_ptr1.eq(
                 Mux(rd_ptr1 == (self.BUFFER_DEPTH - 1), 0, rd_ptr1 + 1)
             )

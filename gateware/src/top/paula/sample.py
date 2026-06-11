@@ -28,7 +28,7 @@ class Sample(wiring.Component):
 
     i_sample: In(ASQ)
     sample_tick: In(1)
-    record_start_evt: In(1)
+    record_toggle_evt: In(1)
     playback_evt: In(1)
     o_sample: Out(ASQ)
 
@@ -96,13 +96,13 @@ class Sample(wiring.Component):
             do_prefetch.eq(
                 self.sample_tick
                 & (play_state == self.PlayState.PREFETCH)
-                & ~self.record_start_evt
+                & ~self.record_toggle_evt
                 & ~self.playback_evt
             ),
             do_play_tick.eq(
                 self.sample_tick
                 & (play_state == self.PlayState.PLAY)
-                & ~self.record_start_evt
+                & ~self.record_toggle_evt
                 & ~self.playback_evt
             ),
             do_play_advance.eq(do_play_tick & (play_acc >= self.CAPTURE_EDGE)),
@@ -112,21 +112,34 @@ class Sample(wiring.Component):
             rd.addr.eq(play_addr),
         ]
 
-        with m.If(self.record_start_evt):
-            # One-shot capture: start immediately and run for a fixed duration.
-            m.d.sync += [
-                recording.eq(1),
-                write_addr.eq(0),
-                valid_length.eq(0),
-                decim_acc.eq(0),
-                play_state.eq(self.PlayState.IDLE),
-                play_addr.eq(0),
-                play_count.eq(0),
-                play_acc.eq(0),
-            ]
+        with m.If(self.record_toggle_evt):
+            with m.If(recording):
+                # Toggle recording off.
+                m.d.sync += recording.eq(0)
+            with m.Else():
+                # Toggle recording on and restart capture buffer.
+                m.d.sync += [
+                    recording.eq(1),
+                    write_addr.eq(0),
+                    valid_length.eq(0),
+                    decim_acc.eq(0),
+                    play_state.eq(self.PlayState.IDLE),
+                    play_addr.eq(0),
+                    play_count.eq(0),
+                    play_acc.eq(0),
+                    last_played_sample.eq(0),
+                ]
         with m.Elif(self.playback_evt):
-            # One-shot playback: restart from sample start on each trigger.
-            with m.If(valid_length != 0):
+            # Toggle playback on/off.
+            with m.If(play_state != self.PlayState.IDLE):
+                m.d.sync += [
+                    play_state.eq(self.PlayState.IDLE),
+                    play_addr.eq(0),
+                    play_count.eq(0),
+                    play_acc.eq(0),
+                    last_played_sample.eq(0),
+                ]
+            with m.Elif(valid_length != 0):
                 m.d.sync += [
                     recording.eq(0),
                     play_state.eq(self.PlayState.PREFETCH),
@@ -166,12 +179,11 @@ class Sample(wiring.Component):
             with m.If(do_play_advance):
                 m.d.sync += play_acc.eq(play_acc - self.CAPTURE_EDGE)
                 with m.If(play_last):
-                    # One-shot playback: stop at sample end.
+                    # Toggle playback mode loops until toggled off.
                     m.d.sync += [
-                        play_state.eq(self.PlayState.IDLE),
+                        play_state.eq(self.PlayState.PREFETCH),
                         play_addr.eq(0),
                         play_count.eq(0),
-                        last_played_sample.eq(0),
                     ]
                 with m.Else():
                     m.d.sync += [

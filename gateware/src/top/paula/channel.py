@@ -37,7 +37,7 @@ class Channel(Elaboratable):
             play_evt.eq(self.i_note_on_valid & (self.i_note == self.play_note)),
             sample.i_sample.eq(self.i_sample),
             sample.sample_tick.eq(self.i_sample_tick),
-            sample.record_start_evt.eq(rec_evt),
+            sample.record_toggle_evt.eq(rec_evt),
             sample.playback_evt.eq(play_evt),
             sample_s8.eq(sample.o_sample.as_value() >> sample_shift),
             self.o_sample_word.eq(

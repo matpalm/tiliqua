@@ -20,13 +20,18 @@ from sample import Sample
 
 class PaulaTop(Elaboratable):
 
-    # With duplicated 8-bit bytes in each AUDxDAT word, Paula output updates
-    # one captured sample every ~2*PER CCK cycles.
     PAULA_CCK_HZ = 60_000_000 // 8
+    PAULA_LINE_RATE_HZ = PAULA_CCK_HZ // 480
+    PAULA_MIN_PERIOD = 121
+    PAULA_TARGET_SAMPLE_HZ = min(Sample.CAPTURE_FREQ, PAULA_LINE_RATE_HZ)
     PAULA_DFT_PERIOD = max(
-        121,
-        int(round(PAULA_CCK_HZ / (2 * Sample.CAPTURE_FREQ))),
+        PAULA_MIN_PERIOD,
+        int(round(PAULA_CCK_HZ / (2 * PAULA_TARGET_SAMPLE_HZ))),
     )
+
+    # Default to channel 0 DMA only; channel 1 can be re-enabled once
+    # bandwidth/servicing is explicitly balanced.
+    PAULA_DMA_ENABLE_MASK = 0b0001
 
     # TODO: if going to 3 channels, move these register defns in channel.py
 
@@ -70,6 +75,12 @@ class PaulaTop(Elaboratable):
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
 
         self.register_mappings = {
+            "AUD0PER": RegisterMapping(
+                enc_range=(0, 127),
+                reg_range=(self.PAULA_MIN_PERIOD, 1000),
+                reg_init=self.PAULA_DFT_PERIOD,
+                mapping="exp",
+            ),
             "AUD0VOL": RegisterMapping(
                 enc_range=(0, 127), reg_range=(0, 64), reg_init=60
             ),
@@ -81,6 +92,7 @@ class PaulaTop(Elaboratable):
         m.submodules.midi_proc = midi_proc = MidiProcessing(
             midi_channel=midi_cfg["midi_channel"],
             cc_mapping={
+                74: self.register_mappings["AUD0PER"],
                 71: self.register_mappings["AUD0VOL"],
                 73: self.register_mappings["AUD1VOL"],
             },
@@ -198,7 +210,7 @@ class PaulaTop(Elaboratable):
                 Mux(
                     pa_rst,
                     C(0, 4),
-                    C(0b0011, 4),
+                    C(self.PAULA_DMA_ENABLE_MASK, 4),
                 )
             ),
             paudio.audpen.eq(0),
@@ -276,7 +288,8 @@ class PaulaTop(Elaboratable):
                 with m.If(paudio.dmal != 0):
                     m.d.sync += saw_any_dmal.eq(1)
 
-            with m.If(write_hold != 0):
+            # Keep scheduler at full DAT throughput (no extra idle cycle).
+            with m.If(write_hold > 1):
                 m.d.sync += write_hold.eq(write_hold - 1)
             with m.Else():
                 with m.Switch(config_state):
@@ -332,9 +345,18 @@ class PaulaTop(Elaboratable):
                         ]
                     with m.Case(7):
                         with m.If(~pa_rst):
+                            aud0per = self.register_mappings["AUD0PER"]
                             aud0vol = self.register_mappings["AUD0VOL"]
                             aud1vol = self.register_mappings["AUD1VOL"]
-                            with m.If(aud0vol.target != aud0vol.written):
+                            with m.If(aud0per.target != aud0per.written):
+                                m.d.sync += [
+                                    reg_addr.eq(self.AUD0PER),
+                                    reg_data.eq(aud0per.target),
+                                    reg_write.eq(1),
+                                    aud0per.written.eq(aud0per.target),
+                                    write_hold.eq(1),
+                                ]
+                            with m.Elif(aud0vol.target != aud0vol.written):
                                 m.d.sync += [
                                     reg_addr.eq(self.AUD0VOL),
                                     reg_data.eq(aud0vol.target),

@@ -19,7 +19,9 @@ class Sample(wiring.Component):
 
     RECORD_SECONDS = 1
     INPUT_FREQ = 48_000
-    CAPTURE_FREQ = 16_726  # protracker .mod files ( high quality )
+    # With one DMA word request per channel per line in this Paula/Agnus model,
+    # keep capture rate at/under line rate so playback can track 1x.
+    CAPTURE_FREQ = 15_625
     _FREQ_GCD = gcd(INPUT_FREQ, CAPTURE_FREQ)
     CAPTURE_NUM = CAPTURE_FREQ // _FREQ_GCD
     CAPTURE_DENOM = INPUT_FREQ // _FREQ_GCD

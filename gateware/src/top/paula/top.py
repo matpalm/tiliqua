@@ -222,18 +222,16 @@ class PaulaTop(Elaboratable):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0PER),
                             reg_data.eq(self.PAULA_DFT_PERIOD),
-                            config_state.eq(3),  # note: straight to 3
+                            config_state.eq(2),
                             write_hold.eq(1),
                         ]
-                    # with m.Case(2):
-                    #     aud0vol = self.register_mappings["AUD0VOL"]
-                    #     m.d.sync += [
-                    #         reg_addr.eq(self.AUD0VOL),
-                    #         reg_data.eq(aud0vol.target),
-                    #         aud0vol.written.eq(aud0vol.target),
-                    #         config_state.eq(3),
-                    #         write_hold.eq(1),
-                    #     ]
+                    with m.Case(2):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD0VOL),
+                            reg_data.eq(64),
+                            config_state.eq(3),
+                            write_hold.eq(1),
+                        ]
                     with m.Case(3):
                         m.d.sync += [
                             reg_addr.eq(self.AUD0LEN),

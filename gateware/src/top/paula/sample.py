@@ -17,7 +17,7 @@ class Sample(wiring.Component):
         PREFETCH = 1
         PLAY = 2
 
-    RECORD_SECONDS = 2
+    RECORD_SECONDS = 1
     INPUT_FREQ = 48_000
     CAPTURE_FREQ = 16_726  # protracker .mod files ( high quality )
     _FREQ_GCD = gcd(INPUT_FREQ, CAPTURE_FREQ)
@@ -28,7 +28,7 @@ class Sample(wiring.Component):
 
     i_sample: In(ASQ)
     sample_tick: In(1)
-    record_toggle_evt: In(1)
+    record_start_evt: In(1)
     playback_evt: In(1)
     o_sample: Out(ASQ)
 
@@ -42,9 +42,6 @@ class Sample(wiring.Component):
         rd = sample_mem.read_port()
 
         recording = Signal(init=0)
-        pending_record_start = Signal(init=0)
-        pending_record_stop = Signal(init=0)
-        pending_play_stop = Signal(init=0)
         valid_length = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
         write_addr = Signal(range(self.MAX_CAPTURE_SAMPLES + 1), init=0)
 
@@ -60,11 +57,8 @@ class Sample(wiring.Component):
         sample_in = Signal(signed(dither.INPUT_WIDTH))
         raw_out = Signal(signed(dither.INPUT_WIDTH))
         play_sample = Signal(signed(dither.INPUT_WIDTH))
-        last_play_sample = Signal(signed(dither.INPUT_WIDTH), init=0)
-        play_positive_zero_cross = Signal()
         last_played_sample = Signal(signed(dither.INPUT_WIDTH), init=0)
-        last_sample = Signal(signed(dither.INPUT_WIDTH), init=0)
-        positive_zero_cross = Signal()
+        fixed_capture_samples = min(self.CAPTURE_FREQ, self.MAX_CAPTURE_SAMPLES)
 
         do_write = Signal()
         do_capture_strobe = Signal()
@@ -84,15 +78,6 @@ class Sample(wiring.Component):
             self.o_sample.as_value().eq(led_lp.o_sample),
             dither.i_sample.eq(sample_in),
             dither.tick.eq(self.sample_tick),
-            positive_zero_cross.eq(
-                self.sample_tick & (last_sample <= 0) & (sample_in > 0)
-            ),
-            play_positive_zero_cross.eq(
-                self.sample_tick
-                & (play_state == self.PlayState.PLAY)
-                & (last_play_sample <= 0)
-                & (play_sample > 0)
-            ),
         ]
 
         with m.If(play_state == self.PlayState.PLAY):
@@ -102,12 +87,7 @@ class Sample(wiring.Component):
             m.d.comb += raw_out.eq(last_played_sample)
 
         m.d.comb += [
-            do_record_input.eq(
-                self.sample_tick
-                & recording
-                & ~self.record_toggle_evt
-                & ~self.playback_evt
-            ),
+            do_record_input.eq(self.sample_tick & recording & ~self.playback_evt),
             do_capture_strobe.eq(do_record_input & (decim_acc >= self.CAPTURE_EDGE)),
             do_write.eq(do_capture_strobe & (write_addr < self.MAX_CAPTURE_SAMPLES)),
             wr.en.eq(do_write),
@@ -116,13 +96,13 @@ class Sample(wiring.Component):
             do_prefetch.eq(
                 self.sample_tick
                 & (play_state == self.PlayState.PREFETCH)
-                & ~self.record_toggle_evt
+                & ~self.record_start_evt
                 & ~self.playback_evt
             ),
             do_play_tick.eq(
                 self.sample_tick
                 & (play_state == self.PlayState.PLAY)
-                & ~self.record_toggle_evt
+                & ~self.record_start_evt
                 & ~self.playback_evt
             ),
             do_play_advance.eq(do_play_tick & (play_acc >= self.CAPTURE_EDGE)),
@@ -132,29 +112,23 @@ class Sample(wiring.Component):
             rd.addr.eq(play_addr),
         ]
 
-        with m.If(self.record_toggle_evt):
-            with m.If(recording):
-                # Stop on next positive crossing.
-                m.d.sync += pending_record_stop.eq(1)
-            with m.Elif(pending_record_start):
-                # Toggle again before crossing cancels pending start.
-                m.d.sync += pending_record_start.eq(0)
-            with m.Else():
-                # Start on next positive crossing.
-                m.d.sync += [
-                    pending_record_start.eq(1),
-                    pending_record_stop.eq(0),
-                ]
+        with m.If(self.record_start_evt):
+            # One-shot capture: start immediately and run for a fixed duration.
+            m.d.sync += [
+                recording.eq(1),
+                write_addr.eq(0),
+                valid_length.eq(0),
+                decim_acc.eq(0),
+                play_state.eq(self.PlayState.IDLE),
+                play_addr.eq(0),
+                play_count.eq(0),
+                play_acc.eq(0),
+            ]
         with m.Elif(self.playback_evt):
-            # Toggle playback: stop is deferred to playback zero crossing.
-            with m.If(play_state != self.PlayState.IDLE):
-                m.d.sync += pending_play_stop.eq(1)
-            with m.Elif(valid_length != 0):
+            # One-shot playback: restart from sample start on each trigger.
+            with m.If(valid_length != 0):
                 m.d.sync += [
                     recording.eq(0),
-                    pending_record_start.eq(0),
-                    pending_record_stop.eq(0),
-                    pending_play_stop.eq(0),
                     play_state.eq(self.PlayState.PREFETCH),
                     play_addr.eq(0),
                     play_count.eq(0),
@@ -162,40 +136,7 @@ class Sample(wiring.Component):
                     last_played_sample.eq(0),
                 ]
 
-        with m.If(positive_zero_cross):
-            with m.If(pending_record_stop & recording):
-                m.d.sync += [
-                    recording.eq(0),
-                    pending_record_stop.eq(0),
-                ]
-            with m.Elif(pending_record_start & ~recording):
-                m.d.sync += [
-                    recording.eq(1),
-                    pending_record_start.eq(0),
-                    write_addr.eq(0),
-                    valid_length.eq(0),
-                    decim_acc.eq(0),
-                    play_state.eq(self.PlayState.IDLE),
-                    play_addr.eq(0),
-                    play_count.eq(0),
-                    play_acc.eq(0),
-                ]
-
-        with m.If(play_positive_zero_cross & pending_play_stop):
-            m.d.sync += [
-                pending_play_stop.eq(0),
-                play_state.eq(self.PlayState.IDLE),
-                play_addr.eq(0),
-                play_count.eq(0),
-                play_acc.eq(0),
-                last_played_sample.eq(0),
-            ]
-
         with m.If(self.sample_tick):
-            m.d.sync += [
-                last_sample.eq(sample_in),
-                last_play_sample.eq(play_sample),
-            ]
             with m.If(play_state == self.PlayState.PLAY):
                 m.d.sync += last_played_sample.eq(play_sample)
 
@@ -210,10 +151,9 @@ class Sample(wiring.Component):
                 write_addr.eq(write_addr + 1),
                 valid_length.eq(write_addr + 1),
             ]
-            with m.If((write_addr + 1) >= self.MAX_CAPTURE_SAMPLES):
+            with m.If((write_addr + 1) >= fixed_capture_samples):
                 m.d.sync += [
                     recording.eq(0),
-                    pending_record_stop.eq(0),
                 ]
 
         with m.If(do_prefetch):
@@ -226,11 +166,12 @@ class Sample(wiring.Component):
             with m.If(do_play_advance):
                 m.d.sync += play_acc.eq(play_acc - self.CAPTURE_EDGE)
                 with m.If(play_last):
-                    # Playback is a toggle mode, so wrap and continue until toggled off.
+                    # One-shot playback: stop at sample end.
                     m.d.sync += [
-                        play_state.eq(self.PlayState.PREFETCH),
+                        play_state.eq(self.PlayState.IDLE),
                         play_addr.eq(0),
                         play_count.eq(0),
+                        last_played_sample.eq(0),
                     ]
                 with m.Else():
                     m.d.sync += [

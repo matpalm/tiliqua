@@ -50,11 +50,8 @@ class FakeAgnus(wiring.Component):
         with m.If(self.i_sample_tick):
             m.d.sync += wr_ptr.eq(Mux(wr_ptr == (self.BUFFER_DEPTH - 1), 0, wr_ptr + 1))
 
-        # Align DMA readers to a delayed point in the ring buffer on restart.
-        with m.If(self.i_audio_dmas[0]):
-            m.d.sync += rd_ptr0.eq(wr_ptr)
-        with m.If(self.i_audio_dmas[1]):
-            m.d.sync += rd_ptr1.eq(wr_ptr)
+        # Keep reader pointers continuous; forcing re-alignment on every
+        # Paula restart request can introduce phase jumps and spikes.
 
         dat0_write = Signal()
         dat1_write = Signal()

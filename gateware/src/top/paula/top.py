@@ -20,7 +20,13 @@ from sample import Sample
 
 class PaulaTop(Elaboratable):
 
-    PAULA_DFT_PERIOD = 248
+    # With duplicated 8-bit bytes in each AUDxDAT word, Paula output updates
+    # one captured sample every ~2*PER CCK cycles.
+    PAULA_CCK_HZ = 60_000_000 // 8
+    PAULA_DFT_PERIOD = max(
+        121,
+        int(round(PAULA_CCK_HZ / (2 * Sample.CAPTURE_FREQ))),
+    )
 
     # TODO: if going to 3 channels, move these register defns in channel.py
 
@@ -258,9 +264,13 @@ class PaulaTop(Elaboratable):
                     saw_any_dmal.eq(0),
                 ]
             with m.Else():
-                m.d.sync += dma_req_pending.eq(
-                    dma_req_pending | Cat(paudio.dmal[0], paudio.dmal[1])
-                )
+                # Paula's dmal is a line-synchronous request snapshot; only
+                # latch it at strhor to avoid re-adding the same request
+                # on every clk7 cycle while dmal stays high.
+                with m.If(strhor_pulse):
+                    m.d.sync += dma_req_pending.eq(
+                        dma_req_pending | Cat(paudio.dmal[0], paudio.dmal[1])
+                    )
                 with m.If(paudio.dmas != 0):
                     m.d.sync += saw_any_dmas.eq(1)
                 with m.If(paudio.dmal != 0):

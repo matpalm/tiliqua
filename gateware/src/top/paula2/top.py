@@ -1,7 +1,7 @@
-"""Paula standalone bring-up with startup capture and AUD0PER rate control.
+"""Paula standalone bring-up with startup capture and MIDI-controlled AUD0PER.
 
-Capture 1 second from input 0 on startup, then replay with 1-second AUD0PER
-segments: 1x, max-slow, 1x, max-fast, repeating.
+Capture 1 second from input 0 on startup, then replay continuously.
+AUD0PER is controlled by MIDI CC74 and AUD0VOL by the configured volume CC.
 
 In CPU-feed mode, AUD0DAT is written by a local scheduler paced from AUD0PER,
 which removes DMAL snapshot ceiling effects for higher playback rates.
@@ -32,22 +32,21 @@ class Paula2Top(Elaboratable):
 
     # Raise 1x period to leave audible headroom for the max-fast segment.
     PAULA_BASE_PERIOD = 320
-    PAULA_SLOW_PERIOD = PAULA_MAX_PERIOD
-    PAULA_FAST_PERIOD = PAULA_MIN_PERIOD
+    PAULA_MIDI_FAST_PERIOD = PAULA_MIN_PERIOD
+    PAULA_MIDI_SLOW_PERIOD = PAULA_MAX_PERIOD
     PAULA_LENGTH_WORDS = FakeAgnus.CAPTURE_WORDS
     PAULA_DMA_ENABLE_MASK = 0b0001
-    RATE_SEGMENT_TICKS = FakeAgnus.INPUT_SAMPLE_HZ
 
     # Option 2: local CPU-fed AUD0DAT pacing instead of DMAL-driven writes.
     USE_CPU_FEED = True
 
     AUD0LEN = 0x52
-    AUD0PER = 0x53
-    AUD0VOL = 0x54
+    AUD0PER = 0x53  # CC74
+    AUD0VOL = 0x54  # CC71
     AUD0DAT = 0x55
 
     bitstream_help = BitstreamHelp(
-        brief="Paula2 capture + AUD0PER 1x/slow/1x/fast",
+        brief="Paula2 capture + MIDI CC74 period + vol CC",
         io_left=[
             "audio in 0",
             "audio in 1",
@@ -75,16 +74,27 @@ class Paula2Top(Elaboratable):
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
 
+        period_cc = int(midi_cfg["paula_channels"][0].get("period_cc", 74))
         volume_cc = int(midi_cfg["paula_channels"][0]["volume_cc"])
         self.register_mappings = {
+            "AUD0PER": RegisterMapping(
+                enc_range=(0, 127),
+                reg_range=(self.PAULA_MIDI_FAST_PERIOD, self.PAULA_MIDI_SLOW_PERIOD),
+                reg_init=self.PAULA_BASE_PERIOD,
+                mapping="exp",
+                anchor=(64, self.PAULA_BASE_PERIOD),
+            ),
             "AUD0VOL": RegisterMapping(
                 enc_range=(0, 127), reg_range=(0, 64), reg_init=64
-            )
+            ),
         }
 
         m.submodules.midi_proc = MidiProcessing(
             midi_channel=int(midi_cfg["midi_channel"]),
-            cc_mapping={volume_cc: self.register_mappings["AUD0VOL"]},
+            cc_mapping={
+                period_cc: self.register_mappings["AUD0PER"],
+                volume_cc: self.register_mappings["AUD0VOL"],
+            },
             system_clk_hz=car.settings.frequencies.sync,
         )
 
@@ -118,9 +128,6 @@ class Paula2Top(Elaboratable):
         dma_idle_ctr = Signal(range(32), init=0)
         dma_idle_kick_done = Signal(init=0)
 
-        rate_segment = Signal(range(4), init=0)
-        rate_segment_tick = Signal(range(self.RATE_SEGMENT_TICKS + 1), init=0)
-        aud0per_target = Signal(unsigned(16))
         aud0per_written = Signal(unsigned(16), init=self.PAULA_BASE_PERIOD)
         # Keep this wide so CPU-feed pacing is not constrained by counter width.
         cpu_feed_ctr = Signal(unsigned(32), init=0)
@@ -176,14 +183,6 @@ class Paula2Top(Elaboratable):
             strhor_pulse.eq(clk7_en_pulse & (strhor_div == 479)),
         ]
 
-        with m.Switch(rate_segment):
-            with m.Case(1):
-                m.d.comb += aud0per_target.eq(self.PAULA_SLOW_PERIOD)
-            with m.Case(3):
-                m.d.comb += aud0per_target.eq(self.PAULA_FAST_PERIOD)
-            with m.Default():
-                m.d.comb += aud0per_target.eq(self.PAULA_BASE_PERIOD)
-
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)
         with m.Elif((config_state == 0) & (~pa_rst)):
@@ -208,20 +207,9 @@ class Paula2Top(Elaboratable):
 
         with m.If(pa_rst):
             m.d.sync += [
-                rate_segment.eq(0),
-                rate_segment_tick.eq(0),
                 aud0per_written.eq(self.PAULA_BASE_PERIOD),
                 cpu_feed_ctr.eq(0),
             ]
-        with m.Elif(sample_tick & (config_state == 4)):
-            with m.If(rate_segment_tick == (self.RATE_SEGMENT_TICKS - 1)):
-                m.d.sync += rate_segment_tick.eq(0)
-                with m.If(rate_segment == 3):
-                    m.d.sync += rate_segment.eq(0)
-                with m.Else():
-                    m.d.sync += rate_segment.eq(rate_segment + 1)
-            with m.Else():
-                m.d.sync += rate_segment_tick.eq(rate_segment_tick + 1)
 
         with m.If(clk7_en_pulse):
             m.d.sync += [
@@ -275,21 +263,23 @@ class Paula2Top(Elaboratable):
                             write_hold.eq(1),
                         ]
                     with m.Case(4):
+                        aud0per = self.register_mappings["AUD0PER"]
                         aud0vol = self.register_mappings["AUD0VOL"]
-                        with m.If(aud0vol.target != aud0vol.written):
+                        with m.If(aud0per.target != aud0per.written):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD0PER),
+                                reg_data.eq(aud0per.target),
+                                reg_write.eq(1),
+                                aud0per.written.eq(aud0per.target),
+                                aud0per_written.eq(aud0per.target),
+                                write_hold.eq(0 if self.USE_CPU_FEED else 1),
+                            ]
+                        with m.Elif(aud0vol.target != aud0vol.written):
                             m.d.sync += [
                                 reg_addr.eq(self.AUD0VOL),
                                 reg_data.eq(aud0vol.target),
                                 reg_write.eq(1),
                                 aud0vol.written.eq(aud0vol.target),
-                                write_hold.eq(0 if self.USE_CPU_FEED else 1),
-                            ]
-                        with m.Elif(aud0per_written != aud0per_target):
-                            m.d.sync += [
-                                reg_addr.eq(self.AUD0PER),
-                                reg_data.eq(aud0per_target),
-                                reg_write.eq(1),
-                                aud0per_written.eq(aud0per_target),
                                 write_hold.eq(0 if self.USE_CPU_FEED else 1),
                             ]
                         with m.Elif(self.USE_CPU_FEED & (dma_prime_writes != 0)):

@@ -14,10 +14,12 @@ class RegisterMapping(object):
         reg_range: Tuple[int, int],
         reg_init: int,
         mapping="linear",
+        anchor: Tuple[int, int] | None = None,
     ):
         self.enc_min, self.enc_max = enc_range
         self.param_min, self.param_max = reg_range
         self.mapping = mapping
+        self.anchor = anchor
         self.lut_len = (self.enc_max - self.enc_min) + 1
 
         self.lut_values = self._build_lut_values()
@@ -36,18 +38,46 @@ class RegisterMapping(object):
         values = []
         span = self.lut_len - 1
 
-        if self.mapping == "linear":
+        def interp(v0, v1, t):
+            if self.mapping == "linear":
+                return v0 + t * (v1 - v0)
+            ratio = v1 / v0
+            return v0 * (ratio**t)
+
+        if self.anchor is None:
+            if self.mapping == "exp" and (self.param_min <= 0 or self.param_max <= 0):
+                raise ValueError("Exponential mapping requires positive range")
+
             for i in range(self.lut_len):
                 t = i / span
-                v = self.param_min + t * (self.param_max - self.param_min)
-                values.append(int(round(v)))
+                values.append(int(round(interp(self.param_min, self.param_max, t))))
             return values
 
-        ratio = self.param_max / self.param_min
+        anchor_enc, anchor_val = self.anchor
+        anchor_enc = max(self.enc_min, min(self.enc_max, anchor_enc))
+
+        if self.mapping == "exp" and (
+            self.param_min <= 0 or anchor_val <= 0 or self.param_max <= 0
+        ):
+            raise ValueError("Exponential mapping requires positive range")
+
         for i in range(self.lut_len):
-            t = i / span
-            v = self.param_min * (ratio**t)
-            values.append(int(round(v)))
+            enc = self.enc_min + i
+            if enc <= anchor_enc:
+                seg_enc_min, seg_enc_max = self.enc_min, anchor_enc
+                seg_val_min, seg_val_max = self.param_min, anchor_val
+            else:
+                seg_enc_min, seg_enc_max = anchor_enc, self.enc_max
+                seg_val_min, seg_val_max = anchor_val, self.param_max
+
+            if seg_enc_max == seg_enc_min:
+                t = 0.0
+            else:
+                t = (enc - seg_enc_min) / (seg_enc_max - seg_enc_min)
+
+            values.append(int(round(interp(seg_val_min, seg_val_max, t))))
+
+        values[anchor_enc - self.enc_min] = int(anchor_val)
         return values
 
     def map(self, encoder_value: Signal):

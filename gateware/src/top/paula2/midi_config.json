@@ -2,6 +2,7 @@
   "midi_channel": 0,
   "paula_channels": [
     {
+      "period_cc": 74,
       "volume_cc": 71
     }
   ]

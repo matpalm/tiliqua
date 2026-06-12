@@ -147,6 +147,10 @@ class Paula2Top(Elaboratable):
 
         pa_l = Signal(signed(15))
         pa_r = Signal(signed(15))
+        pa_l_x2 = Signal(signed(16))
+        pa_r_x2 = Signal(signed(16))
+        pa_l_boost = Signal(signed(15))
+        pa_r_boost = Signal(signed(15))
         out_shift = max(ASQ.as_shape().width - 15, 0)
 
         m.d.comb += [
@@ -162,9 +166,33 @@ class Paula2Top(Elaboratable):
             in0_s8.eq(raw_in0 >> in_shift),
             pa_l.eq(paudio.ldata.as_signed()),
             pa_r.eq(paudio.rdata.as_signed()),
+            pa_l_x2.eq(pa_l.as_signed() << 1),
+            pa_r_x2.eq(pa_r.as_signed() << 1),
+            pa_l_boost.eq(
+                Mux(
+                    pa_l_x2 > C(16383, signed(16)),
+                    C(16383, signed(16)),
+                    Mux(
+                        pa_l_x2 < C(-16384, signed(16)),
+                        C(-16384, signed(16)),
+                        pa_l_x2,
+                    ),
+                )
+            ),
+            pa_r_boost.eq(
+                Mux(
+                    pa_r_x2 > C(16383, signed(16)),
+                    C(16383, signed(16)),
+                    Mux(
+                        pa_r_x2 < C(-16384, signed(16)),
+                        C(-16384, signed(16)),
+                        pa_r_x2,
+                    ),
+                )
+            ),
             pa_rst.eq(reset_ctr != 0),
-            pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
-            pmod0.i_cal.payload[1].as_value().eq(pa_r << out_shift),
+            pmod0.i_cal.payload[0].as_value().eq(pa_l_boost << out_shift),
+            pmod0.i_cal.payload[1].as_value().eq(pa_r_boost << out_shift),
             pmod0.i_cal.payload[2].as_value().eq(0),
             pmod0.i_cal.payload[3].as_value().eq(0),
             paudio.clk7_en.eq(clk7_en_pulse),

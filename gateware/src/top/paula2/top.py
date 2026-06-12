@@ -30,8 +30,8 @@ class Paula2Top(Elaboratable):
     PAULA_MIN_PERIOD = 121
     PAULA_MAX_PERIOD = 0xFFFF
 
-    # Raise 1x period to leave audible headroom for the max-fast segment.
-    PAULA_BASE_PERIOD = 320
+    # Keep default period aligned with FakeAgnus capture-rate decimation.
+    PAULA_BASE_PERIOD = FakeAgnus.DEFAULT_AUD0PER
     PAULA_MIDI_FAST_PERIOD = PAULA_MIN_PERIOD
     PAULA_MIDI_SLOW_PERIOD = PAULA_MAX_PERIOD
     PAULA_LENGTH_WORDS = FakeAgnus.CAPTURE_WORDS

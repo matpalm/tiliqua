@@ -18,16 +18,24 @@ class FakeAgnus(wiring.Component):
     FRAC_BITS = 16
 
     PHASE_INC_1X = 1 << FRAC_BITS
+    PAULA_CCK_HZ = 60_000_000 // 8
+    # Keep this in sync with Paula2Top.PAULA_BASE_PERIOD.
+    DEFAULT_AUD0PER = 320
 
     INPUT_SAMPLE_HZ = 48_000
-    PLAYBACK_1X_BYTE_HZ = 31_250
     CAPTURE_SECONDS = 1
 
-    CAPTURE_BYTES = PLAYBACK_1X_BYTE_HZ * CAPTURE_SECONDS
+    # Capture at the default AUD0PER byte rate so DFT playback cadence
+    # matches recorded sample cadence.
+    CAPTURE_BYTES = (
+        (PAULA_CCK_HZ * CAPTURE_SECONDS) // (2 * DEFAULT_AUD0PER) // 2
+    ) * 2
     CAPTURE_WORDS = CAPTURE_BYTES // 2
 
-    CAPTURE_NUM = PLAYBACK_1X_BYTE_HZ
-    CAPTURE_DEN = INPUT_SAMPLE_HZ
+    # Exact fractional capture strobe ratio over i_sample_tick events:
+    # (PAULA_CCK_HZ / (2 * DEFAULT_AUD0PER)) / INPUT_SAMPLE_HZ.
+    CAPTURE_NUM = PAULA_CCK_HZ
+    CAPTURE_DEN = 2 * DEFAULT_AUD0PER * INPUT_SAMPLE_HZ
     CAPTURE_EDGE = CAPTURE_DEN - CAPTURE_NUM
 
     i_reset: In(1)

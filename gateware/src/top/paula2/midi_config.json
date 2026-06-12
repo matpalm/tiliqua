@@ -11,6 +11,10 @@
       "play_note": 37
     }
   ],
+  "modulation": {
+    "toggle_atper0_note": 50,
+    "toggle_atvol0_note": 51
+  },
   "paula_channels": [
     {
       "period_cc": 74,

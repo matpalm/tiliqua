@@ -91,7 +91,10 @@ class Paula2Top(Elaboratable):
         period_cc1 = midi_cfg["paula_channels"][1]["period_cc"]
         volume_cc1 = midi_cfg["paula_channels"][1]["volume_cc"]
 
-        adkcon_audio_set_bits = midi_cfg["adkcon_audio_set_bits"] & 0xFF
+        modulation_cfg = midi_cfg.get("modulation", {})
+        adkcon_audio_set_bits = int(midi_cfg.get("adkcon_audio_set_bits", 0)) & 0xFF
+        atvol0_note = modulation_cfg.get("toggle_atvol0_note")
+        atper0_note = modulation_cfg.get("toggle_atper0_note")
 
         self.register_mappings = {
             "AUD0PER": RegisterMapping(
@@ -170,6 +173,12 @@ class Paula2Top(Elaboratable):
         cpu_feed_due0 = Signal()
         cpu_feed_due1 = Signal()
         cpu_feed_sel = Signal(init=0)
+
+        adkcon_target_bits = Signal(unsigned(8), init=adkcon_audio_set_bits)
+        adkcon_written_bits = Signal(unsigned(8), init=0)
+        adkcon_bits_to_set = Signal(unsigned(8))
+        adkcon_bits_to_clear = Signal(unsigned(8))
+        adkcon_toggle_mask = Signal(unsigned(8))
 
         sample_tick = Signal()
         record_toggle_evt0 = Signal()
@@ -280,8 +289,29 @@ class Paula2Top(Elaboratable):
             fake_agnus1.i_reg_data.eq(reg_data),
             cpu_feed_due0.eq(cpu_feed_ctr0 >= ((aud0per_written << 1) - 1)),
             cpu_feed_due1.eq(cpu_feed_ctr1 >= ((aud1per_written << 1) - 1)),
+            adkcon_bits_to_set.eq(adkcon_target_bits & ~adkcon_written_bits),
+            adkcon_bits_to_clear.eq(adkcon_written_bits & ~adkcon_target_bits),
             strhor_pulse.eq(clk7_en_pulse & (strhor_div == 479)),
         ]
+
+        toggle_mask_val = 0
+        if atvol0_note is not None:
+            toggle_mask_val = toggle_mask_val | (
+                Mux(
+                    midi_proc.o_note_on_valid & (midi_proc.o_note == int(atvol0_note)),
+                    C(0x01, 8),
+                    C(0x00, 8),
+                )
+            )
+        if atper0_note is not None:
+            toggle_mask_val = toggle_mask_val | (
+                Mux(
+                    midi_proc.o_note_on_valid & (midi_proc.o_note == int(atper0_note)),
+                    C(0x10, 8),
+                    C(0x00, 8),
+                )
+            )
+        m.d.comb += adkcon_toggle_mask.eq(toggle_mask_val)
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)
@@ -312,7 +342,11 @@ class Paula2Top(Elaboratable):
                 cpu_feed_ctr0.eq(0),
                 cpu_feed_ctr1.eq(0),
                 cpu_feed_sel.eq(0),
+                adkcon_target_bits.eq(adkcon_audio_set_bits),
+                adkcon_written_bits.eq(0),
             ]
+        with m.Elif(adkcon_toggle_mask != 0):
+            m.d.sync += adkcon_target_bits.eq(adkcon_target_bits ^ adkcon_toggle_mask)
 
         with m.If(clk7_en_pulse):
             m.d.sync += [
@@ -330,6 +364,7 @@ class Paula2Top(Elaboratable):
                             reg_addr.eq(self.ADKCON),
                             reg_data.eq(0x8000 | adkcon_audio_set_bits),
                             reg_write.eq(1),
+                            adkcon_written_bits.eq(adkcon_audio_set_bits),
                             config_state.eq(2),
                             write_hold.eq(1),
                         ]
@@ -388,7 +423,27 @@ class Paula2Top(Elaboratable):
                         aud0vol = self.register_mappings["AUD0VOL"]
                         aud1vol = self.register_mappings["AUD1VOL"]
 
-                        with m.If(aud0per.target != aud0per.written):
+                        with m.If(adkcon_bits_to_set != 0):
+                            m.d.sync += [
+                                reg_addr.eq(self.ADKCON),
+                                reg_data.eq(0x8000 | adkcon_bits_to_set),
+                                reg_write.eq(1),
+                                adkcon_written_bits.eq(
+                                    adkcon_written_bits | adkcon_bits_to_set
+                                ),
+                                write_hold.eq(1),
+                            ]
+                        with m.Elif(adkcon_bits_to_clear != 0):
+                            m.d.sync += [
+                                reg_addr.eq(self.ADKCON),
+                                reg_data.eq(adkcon_bits_to_clear),
+                                reg_write.eq(1),
+                                adkcon_written_bits.eq(
+                                    adkcon_written_bits & (~adkcon_bits_to_clear)
+                                ),
+                                write_hold.eq(1),
+                            ]
+                        with m.Elif(aud0per.target != aud0per.written):
                             m.d.sync += [
                                 reg_addr.eq(self.AUD0PER),
                                 reg_data.eq(aud0per.target),

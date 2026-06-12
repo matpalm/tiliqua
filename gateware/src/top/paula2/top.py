@@ -7,6 +7,9 @@ In CPU-feed mode, AUD0DAT is written by a local scheduler paced from AUD0PER,
 which removes DMAL snapshot ceiling effects for higher playback rates.
 """
 
+import json
+from pathlib import Path
+
 from amaranth import *
 from amaranth.lib import wiring
 
@@ -17,6 +20,7 @@ from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
 
 from fake_agnus import FakeAgnus
+from midi import MidiProcessing, RegisterMapping
 from paula_audio_wrapper import PaulaAudioWrapper
 
 
@@ -54,7 +58,7 @@ class Paula2Top(Elaboratable):
             "",
             "",
         ],
-        io_right=["", "", "", "", "", ""],
+        io_right=["", "", "", "", "", "TRS MIDI in"],
     )
 
     def __init__(self, clock_settings):
@@ -64,8 +68,25 @@ class Paula2Top(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
+        cfg_path = Path(__file__).with_name("midi_config.json")
+        with open(cfg_path, "r") as f:
+            midi_cfg = json.loads(f.read())
+
         m.submodules.car = car = platform.clock_domain_generator(self.clock_settings)
         m.submodules.reboot = reboot = RebootProvider(car.settings.frequencies.sync)
+
+        volume_cc = int(midi_cfg["paula_channels"][0]["volume_cc"])
+        self.register_mappings = {
+            "AUD0VOL": RegisterMapping(
+                enc_range=(0, 127), reg_range=(0, 64), reg_init=64
+            )
+        }
+
+        m.submodules.midi_proc = MidiProcessing(
+            midi_channel=int(midi_cfg["midi_channel"]),
+            cc_mapping={volume_cc: self.register_mappings["AUD0VOL"]},
+            system_clk_hz=car.settings.frequencies.sync,
+        )
 
         m.submodules.pmod0_provider = pmod0_provider = eurorack_pmod.FFCProvider()
         m.submodules.pmod0 = pmod0 = eurorack_pmod.EurorackPmod(
@@ -254,7 +275,16 @@ class Paula2Top(Elaboratable):
                             write_hold.eq(1),
                         ]
                     with m.Case(4):
-                        with m.If(aud0per_written != aud0per_target):
+                        aud0vol = self.register_mappings["AUD0VOL"]
+                        with m.If(aud0vol.target != aud0vol.written):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD0VOL),
+                                reg_data.eq(aud0vol.target),
+                                reg_write.eq(1),
+                                aud0vol.written.eq(aud0vol.target),
+                                write_hold.eq(0 if self.USE_CPU_FEED else 1),
+                            ]
+                        with m.Elif(aud0per_written != aud0per_target):
                             m.d.sync += [
                                 reg_addr.eq(self.AUD0PER),
                                 reg_data.eq(aud0per_target),

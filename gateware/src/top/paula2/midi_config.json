@@ -1,0 +1,8 @@
+{
+  "midi_channel": 0,
+  "paula_channels": [
+    {
+      "volume_cc": 71
+    }
+  ]
+}

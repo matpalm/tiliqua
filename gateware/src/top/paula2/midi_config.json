@@ -5,12 +5,20 @@
     {
       "record_note": 44,
       "play_note": 36
+    },
+    {
+      "record_note": 45,
+      "play_note": 37
     }
   ],
   "paula_channels": [
     {
       "period_cc": 74,
       "volume_cc": 71
+    },
+    {
+      "period_cc": 93,
+      "volume_cc": 73
     }
   ]
 }

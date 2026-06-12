@@ -22,6 +22,7 @@ class FakeAgnus(wiring.Component):
     """
 
     AUD0DAT = 0x55
+    AUD1DAT = 0x5D
 
     PHASE_WIDTH = 32
     FRAC_BITS = 16
@@ -63,6 +64,10 @@ class FakeAgnus(wiring.Component):
     o_capture_done: Out(1)
     o_phase_inc: Out(unsigned(PHASE_WIDTH))
 
+    def __init__(self, aud_dat_addr: int = AUD0DAT):
+        self.aud_dat_addr = int(aud_dat_addr)
+        super().__init__()
+
     def elaborate(self, platform):
         m = Module()
 
@@ -102,7 +107,7 @@ class FakeAgnus(wiring.Component):
         dat_write_edge = Signal()
 
         m.d.comb += [
-            dat_write.eq(self.i_reg_write & (self.i_reg_addr == self.AUD0DAT)),
+            dat_write.eq(self.i_reg_write & (self.i_reg_addr == self.aud_dat_addr)),
             dat_write_edge.eq(dat_write & ~dat_write_prev),
             in_sample_s8.eq(self.i_sample_in.as_signed()),
             in_pos_zero_cross.eq(

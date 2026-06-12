@@ -7,8 +7,8 @@ from amaranth.lib.wiring import In, Out
 class FakeAgnus(wiring.Component):
     """Minimal Agnus-side model for Paula AUD0DAT feeding.
 
-    Captures 1 second of input at startup, then replays that buffer while
-    switching playback rate in 1-second segments: 1x, 1/4x, 1x, 4x, repeat.
+    Captures 1 second of input at startup, then replays that buffer.
+    Playback rate modulation is driven by AUD0PER programming in top.py.
     Each AUD0DAT word is packed as two consecutive sample bytes.
     """
 
@@ -29,8 +29,6 @@ class FakeAgnus(wiring.Component):
     CAPTURE_NUM = PLAYBACK_1X_BYTE_HZ
     CAPTURE_DEN = INPUT_SAMPLE_HZ
     CAPTURE_EDGE = CAPTURE_DEN - CAPTURE_NUM
-
-    RATE_SEGMENT_TICKS = INPUT_SAMPLE_HZ
 
     i_reset: In(1)
     i_audio_dmal: In(1)
@@ -69,9 +67,6 @@ class FakeAgnus(wiring.Component):
         phase_next = Signal(unsigned(self.PHASE_WIDTH))
         phase_wrap = Signal(unsigned(self.PHASE_WIDTH))
 
-        segment = Signal(range(4), init=0)
-        segment_ticks = Signal(range(self.RATE_SEGMENT_TICKS + 1), init=0)
-
         mem_limit_phase = Const(self.CAPTURE_WORDS << self.FRAC_BITS, self.PHASE_WIDTH)
 
         dat_write = Signal()
@@ -99,13 +94,7 @@ class FakeAgnus(wiring.Component):
             phase_wrap.eq(phase_next - mem_limit_phase),
         ]
 
-        with m.Switch(segment):
-            with m.Case(1):
-                m.d.comb += phase_inc.eq(self.PHASE_INC_1X // 4)
-            with m.Case(3):
-                m.d.comb += phase_inc.eq(self.PHASE_INC_1X * 4)
-            with m.Default():
-                m.d.comb += phase_inc.eq(self.PHASE_INC_1X)
+        m.d.comb += phase_inc.eq(self.PHASE_INC_1X)
 
         m.d.sync += dat_write_prev.eq(dat_write)
 
@@ -119,8 +108,6 @@ class FakeAgnus(wiring.Component):
                 capture_acc.eq(0),
                 play_word_addr.eq(0),
                 phase.eq(0),
-                segment.eq(0),
-                segment_ticks.eq(0),
             ]
         with m.Else():
             with m.If(
@@ -147,21 +134,9 @@ class FakeAgnus(wiring.Component):
                             capturing.eq(0),
                             phase.eq(0),
                             play_word_addr.eq(0),
-                            segment.eq(0),
-                            segment_ticks.eq(0),
                         ]
                 with m.Else():
                     m.d.sync += capture_acc.eq(capture_acc + self.CAPTURE_NUM)
-
-            with m.If(~capturing & self.i_sample_tick):
-                with m.If(segment_ticks == (self.RATE_SEGMENT_TICKS - 1)):
-                    m.d.sync += segment_ticks.eq(0)
-                    with m.If(segment == 3):
-                        m.d.sync += segment.eq(0)
-                    with m.Else():
-                        m.d.sync += segment.eq(segment + 1)
-                with m.Else():
-                    m.d.sync += segment_ticks.eq(segment_ticks + 1)
 
             with m.If(dat_write_edge & ~capturing):
                 with m.If(phase_next >= mem_limit_phase):

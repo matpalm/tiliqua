@@ -44,6 +44,7 @@ class Paula2Top(Elaboratable):
     AUD0PER = 0x53  # CC74
     AUD0VOL = 0x54  # CC71
     AUD0DAT = 0x55
+    ADKCON = 0x4F
 
     bitstream_help = BitstreamHelp(
         brief="Paula2 note rec/play + MIDI CC74 period + vol",
@@ -79,6 +80,7 @@ class Paula2Top(Elaboratable):
         sample_cfg = midi_cfg.get("samples", [{"record_note": 44, "play_note": 36}])[0]
         record_note = int(sample_cfg.get("record_note", 44))
         play_note = int(sample_cfg.get("play_note", 36))
+        adkcon_audio_set_bits = int(midi_cfg.get("adkcon_audio_set_bits", 0)) & 0xFF
         self.register_mappings = {
             "AUD0PER": RegisterMapping(
                 enc_range=(0, 127),
@@ -278,30 +280,38 @@ class Paula2Top(Elaboratable):
                 with m.Switch(config_state):
                     with m.Case(1):
                         m.d.sync += [
-                            reg_addr.eq(self.AUD0PER),
-                            reg_data.eq(self.PAULA_BASE_PERIOD),
+                            reg_addr.eq(self.ADKCON),
+                            reg_data.eq(0x8000 | adkcon_audio_set_bits),
                             reg_write.eq(1),
                             config_state.eq(2),
                             write_hold.eq(1),
                         ]
                     with m.Case(2):
                         m.d.sync += [
-                            reg_addr.eq(self.AUD0VOL),
-                            reg_data.eq(64),
+                            reg_addr.eq(self.AUD0PER),
+                            reg_data.eq(self.PAULA_BASE_PERIOD),
                             reg_write.eq(1),
                             config_state.eq(3),
                             write_hold.eq(1),
                         ]
                     with m.Case(3):
                         m.d.sync += [
-                            reg_addr.eq(self.AUD0LEN),
-                            reg_data.eq(self.PAULA_LENGTH_WORDS),
+                            reg_addr.eq(self.AUD0VOL),
+                            reg_data.eq(64),
                             reg_write.eq(1),
                             config_state.eq(4),
-                            dma_prime_writes.eq(8 if self.USE_CPU_FEED else 12),
                             write_hold.eq(1),
                         ]
                     with m.Case(4):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD0LEN),
+                            reg_data.eq(self.PAULA_LENGTH_WORDS),
+                            reg_write.eq(1),
+                            config_state.eq(5),
+                            dma_prime_writes.eq(8 if self.USE_CPU_FEED else 12),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(5):
                         aud0per = self.register_mappings["AUD0PER"]
                         aud0vol = self.register_mappings["AUD0VOL"]
                         with m.If(self.USE_CPU_FEED & (dma_prime_writes != 0)):

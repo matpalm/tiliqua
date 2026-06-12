@@ -1,5 +1,6 @@
 {
   "midi_channel": 0,
+  "adkcon_audio_set_bits": 0,
   "samples": [
     {
       "record_note": 44,

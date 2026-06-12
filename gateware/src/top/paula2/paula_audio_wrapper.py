@@ -31,7 +31,7 @@ class PaulaAudioWrapper(Elaboratable):
 
         vroot = os.path.join(
             os.path.dirname(os.path.realpath(__file__)),
-            "../../../deps/Minimig-AGA_MiSTer/rtl",
+            "minimig",
         )
 
         for file_name in [

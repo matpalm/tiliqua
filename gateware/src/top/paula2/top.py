@@ -1,7 +1,7 @@
-"""Paula standalone bring-up with strict +/-2 octave synthetic playback.
+"""Paula standalone bring-up with startup capture and timed playback rates.
 
-This top keeps Paula timing and DMA request servicing realistic while feeding
-AUD0DAT from a synthetic source that packs consecutive bytes per word.
+Capture 1 second from input 0 on startup, then replay with 1-second segments:
+1x, 1/4x, 1x, 4x, repeating.
 """
 
 from amaranth import *
@@ -24,7 +24,7 @@ class Paula2Top(Elaboratable):
 
     # Keep transport cadence near the known-good 1x region.
     PAULA_BASE_PERIOD = 240
-    PAULA_LENGTH_WORDS = 16384
+    PAULA_LENGTH_WORDS = FakeAgnus.CAPTURE_WORDS
     PAULA_DMA_ENABLE_MASK = 0b0001
 
     AUD0LEN = 0x52
@@ -33,7 +33,7 @@ class Paula2Top(Elaboratable):
     AUD0DAT = 0x55
 
     bitstream_help = BitstreamHelp(
-        brief="Paula standalone (+/-2 octave synthetic source)",
+        brief="Paula standalone (startup capture + 1x/0.25x/1x/4x replay)",
         io_left=[
             "audio in 0",
             "audio in 1",
@@ -88,6 +88,12 @@ class Paula2Top(Elaboratable):
         dma_idle_kick_done = Signal(init=0)
 
         dmal0_prev = Signal(init=0)
+        sample_tick = Signal()
+
+        sample_width = ASQ.as_shape().width
+        in_shift = max(sample_width - 8, 0)
+        raw_in0 = Signal(signed(sample_width))
+        in0_s8 = Signal(signed(8))
 
         pa_l = Signal(signed(15))
         pa_r = Signal(signed(15))
@@ -97,9 +103,12 @@ class Paula2Top(Elaboratable):
             pmod0.o_cal.ready.eq(1),
             pmod0.i_cal.valid.eq(1),
             pmod0.codec_mute.eq(0),
+            sample_tick.eq(pmod0.o_cal.valid),
+            raw_in0.eq(pmod0.o_cal.payload[0].as_value()),
+            in0_s8.eq(raw_in0 >> in_shift),
             pa_l.eq(paudio.ldata.as_signed()),
             pa_r.eq(paudio.rdata.as_signed()),
-            pa_rst.eq(reset_ctr != 0),
+            pa_rst.eq((reset_ctr != 0) | (~fake_agnus.o_capture_done)),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
             pmod0.i_cal.payload[1].as_value().eq(pa_r << out_shift),
             pmod0.i_cal.payload[2].as_value().eq(0),
@@ -112,9 +121,11 @@ class Paula2Top(Elaboratable):
             paudio.data_in.eq(reg_data),
             paudio.dmaena.eq(Mux(pa_rst, C(0, 4), C(self.PAULA_DMA_ENABLE_MASK, 4))),
             paudio.audpen.eq(0),
-            fake_agnus.i_reset.eq(pa_rst),
+            fake_agnus.i_reset.eq(reset_ctr != 0),
             fake_agnus.i_audio_dmal.eq(paudio.dmal[0]),
             fake_agnus.i_audio_dmas.eq(paudio.dmas[0]),
+            fake_agnus.i_sample_tick.eq(sample_tick),
+            fake_agnus.i_sample_in.eq(in0_s8.as_unsigned()),
             fake_agnus.i_reg_write.eq(reg_write),
             fake_agnus.i_reg_addr.eq(reg_addr),
             fake_agnus.i_reg_data.eq(reg_data),
@@ -123,7 +134,7 @@ class Paula2Top(Elaboratable):
 
         with m.If(reset_ctr != 0):
             m.d.sync += reset_ctr.eq(reset_ctr - 1)
-        with m.Elif(config_state == 0):
+        with m.Elif((config_state == 0) & (~pa_rst)):
             m.d.sync += config_state.eq(1)
 
         with m.If(clk7_div == 7):

@@ -7,8 +7,16 @@ from amaranth.lib.wiring import In, Out
 class FakeAgnus(wiring.Component):
     """Minimal Agnus-side model for Paula AUD0DAT feeding.
 
-    Captures from input when record toggle is active, then replays that buffer
-    when playback is toggled on.
+    Captures from input when record is active, then replays that buffer when
+    playback is enabled.
+
+    State behavior:
+    - `record_note` starts recording on next positive zero crossing.
+    - `record_note` while recording stops on next positive zero crossing and
+      immediately starts playback if any sample was captured.
+    - `play_note` toggles playback immediately.
+    - `record_note` while playing back stops playback and arms recording.
+
     Playback rate modulation is driven by AUD0PER programming in top.py.
     Each AUD0DAT word is packed as two consecutive sample bytes.
     """
@@ -66,6 +74,13 @@ class FakeAgnus(wiring.Component):
 
         recording = Signal(init=0)
         playback_enabled = Signal(init=0)
+        pending_record_start = Signal(init=0)
+        pending_record_stop = Signal(init=0)
+
+        in_sample_s8 = Signal(signed(8))
+        in_prev_s8 = Signal(signed(8), init=0)
+        in_pos_zero_cross = Signal()
+
         capture_count = Signal(range(self.CAPTURE_BYTES + 1), init=0)
         capture_word_ptr = Signal(range(self.CAPTURE_WORDS), init=0)
         valid_words = Signal(range(self.CAPTURE_WORDS + 1), init=0)
@@ -89,6 +104,10 @@ class FakeAgnus(wiring.Component):
         m.d.comb += [
             dat_write.eq(self.i_reg_write & (self.i_reg_addr == self.AUD0DAT)),
             dat_write_edge.eq(dat_write & ~dat_write_prev),
+            in_sample_s8.eq(self.i_sample_in.as_signed()),
+            in_pos_zero_cross.eq(
+                self.i_sample_tick & (in_prev_s8 <= 0) & (in_sample_s8 > 0)
+            ),
             capture_strobe.eq(
                 self.i_sample_tick
                 & recording
@@ -125,6 +144,9 @@ class FakeAgnus(wiring.Component):
             m.d.sync += [
                 recording.eq(0),
                 playback_enabled.eq(0),
+                pending_record_start.eq(0),
+                pending_record_stop.eq(0),
+                in_prev_s8.eq(0),
                 capture_count.eq(0),
                 capture_word_ptr.eq(0),
                 valid_words.eq(0),
@@ -137,13 +159,46 @@ class FakeAgnus(wiring.Component):
         with m.Else():
             with m.If(self.i_record_toggle_evt):
                 with m.If(recording):
+                    # Toggle stop while recording; apply at next + zero crossing.
+                    with m.If(pending_record_stop):
+                        m.d.sync += pending_record_stop.eq(0)
+                    with m.Else():
+                        m.d.sync += pending_record_stop.eq(1)
+                with m.Else():
+                    # Arm recording start at next + zero crossing.
+                    with m.If(pending_record_start):
+                        m.d.sync += pending_record_start.eq(0)
+                    with m.Else():
+                        m.d.sync += [
+                            playback_enabled.eq(0),
+                            pending_record_start.eq(1),
+                            pending_record_stop.eq(0),
+                        ]
+            with m.Elif(self.i_playback_evt):
+                with m.If(playback_enabled):
+                    m.d.sync += playback_enabled.eq(0)
+                with m.Elif((~recording) & (~pending_record_start) & (valid_words != 0)):
+                    m.d.sync += [
+                        playback_enabled.eq(1),
+                        play_word_addr.eq(0),
+                        phase.eq(0),
+                    ]
+
+            # Record transitions are zero-cross aligned.
+            with m.If(in_pos_zero_cross):
+                with m.If(pending_record_stop & recording):
                     m.d.sync += [
                         recording.eq(0),
+                        pending_record_stop.eq(0),
                         capture_half.eq(0),
+                        playback_enabled.eq(valid_words != 0),
+                        play_word_addr.eq(0),
+                        phase.eq(0),
                     ]
-                with m.Else():
+                with m.Elif(pending_record_start & ~recording):
                     m.d.sync += [
                         recording.eq(1),
+                        pending_record_start.eq(0),
                         playback_enabled.eq(0),
                         capture_count.eq(0),
                         capture_word_ptr.eq(0),
@@ -154,15 +209,9 @@ class FakeAgnus(wiring.Component):
                         play_word_addr.eq(0),
                         phase.eq(0),
                     ]
-            with m.Elif(self.i_playback_evt):
-                with m.If(playback_enabled):
-                    m.d.sync += playback_enabled.eq(0)
-                with m.Elif(valid_words != 0):
-                    m.d.sync += [
-                        playback_enabled.eq(1),
-                        play_word_addr.eq(0),
-                        phase.eq(0),
-                    ]
+
+            with m.If(self.i_sample_tick):
+                m.d.sync += in_prev_s8.eq(in_sample_s8)
 
             with m.If(
                 self.i_sample_tick & recording & (capture_count < self.CAPTURE_BYTES)

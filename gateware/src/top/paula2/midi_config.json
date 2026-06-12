@@ -9,12 +9,12 @@
     {
       "record_note": 45,
       "play_note": 37
+    },
+    {
+      "record_note": 46,
+      "play_note": 38
     }
   ],
-  "modulation": {
-    "toggle_atper0_note": 50,
-    "toggle_atvol0_note": 51
-  },
   "paula_channels": [
     {
       "period_cc": 74,
@@ -23,6 +23,16 @@
     {
       "period_cc": 93,
       "volume_cc": 73
+    },
+    {
+      "period_cc": 18,
+      "volume_cc": 19
     }
-  ]
+  ],
+  "modulation": {
+    "toggle_atper0_note": 49,
+    "toggle_atvol0_note": 41,
+    "toggle_atper1_note": 50,
+    "toggle_atvol1_note": 42
+  }
 }

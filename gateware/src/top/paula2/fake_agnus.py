@@ -5,7 +5,7 @@ from amaranth.lib.wiring import In, Out
 
 
 class FakeAgnus(wiring.Component):
-    """Minimal Agnus-side model for Paula AUD0DAT feeding.
+    """Minimal Agnus-side model for Paula AUDxDAT feeding.
 
     Captures from input when record is active, then replays that buffer when
     playback is enabled.
@@ -23,6 +23,7 @@ class FakeAgnus(wiring.Component):
 
     AUD0DAT = 0x55
     AUD1DAT = 0x5D
+    AUD2DAT = 0x65
 
     PHASE_WIDTH = 32
     FRAC_BITS = 16
@@ -44,6 +45,7 @@ class FakeAgnus(wiring.Component):
 
     # Exact fractional capture strobe ratio over i_sample_tick events:
     # (PAULA_CCK_HZ / (2 * DEFAULT_AUD0PER)) / INPUT_SAMPLE_HZ.
+
     CAPTURE_NUM = PAULA_CCK_HZ
     CAPTURE_DEN = 2 * DEFAULT_AUD0PER * INPUT_SAMPLE_HZ
     CAPTURE_EDGE = CAPTURE_DEN - CAPTURE_NUM

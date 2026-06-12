@@ -95,14 +95,14 @@ class Paula2Top(Elaboratable):
         self.register_mappings = {
             "AUD0PER": RegisterMapping(
                 enc_range=(0, 127),
-                reg_range=(self.PAULA_MIDI_FAST_PERIOD, self.PAULA_MIDI_SLOW_PERIOD),
+                reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
                 reg_init=self.PAULA_BASE_PERIOD,
                 mapping="exp",
                 anchor=(64, self.PAULA_BASE_PERIOD),
             ),
             "AUD1PER": RegisterMapping(
                 enc_range=(0, 127),
-                reg_range=(self.PAULA_MIDI_FAST_PERIOD, self.PAULA_MIDI_SLOW_PERIOD),
+                reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
                 reg_init=self.PAULA_BASE_PERIOD,
                 mapping="exp",
                 anchor=(64, self.PAULA_BASE_PERIOD),

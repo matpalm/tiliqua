@@ -23,11 +23,11 @@ class RegisterMapping(object):
         self.lut_len = (self.enc_max - self.enc_min) + 1
 
         self.lut_values = self._build_lut_values()
-        value_bits = max(self.param_max, 1).bit_length()
+        max_val = max(self.lut_values)
+        value_bits = max(max_val, 1).bit_length()
         value_shape = unsigned(value_bits)
         self._lut = Array(Const(v, value_shape) for v in self.lut_values)
 
-        max_val = max(self.lut_values)
         self.target = Signal(range(max_val + 1), init=reg_init)
         # Start "written" at the same value to avoid unnecessary startup rewrites
         # that can momentarily steal cycles from AUD0DAT feeding.

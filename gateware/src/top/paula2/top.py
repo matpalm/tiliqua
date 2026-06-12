@@ -1,6 +1,6 @@
-"""Paula standalone bring-up with startup capture and MIDI-controlled AUD0PER.
+"""Paula standalone with MIDI-controlled record/playback and AUD0PER.
 
-Capture 1 second from input 0 on startup, then replay continuously.
+Recording is toggled by record_note; playback is toggled by play_note.
 AUD0PER is controlled by MIDI CC74 and AUD0VOL by the configured volume CC.
 
 In CPU-feed mode, AUD0DAT is written by a local scheduler paced from AUD0PER,
@@ -46,7 +46,7 @@ class Paula2Top(Elaboratable):
     AUD0DAT = 0x55
 
     bitstream_help = BitstreamHelp(
-        brief="Paula2 capture + MIDI CC74 period + vol CC",
+        brief="Paula2 note rec/play + MIDI CC74 period + vol",
         io_left=[
             "audio in 0",
             "audio in 1",
@@ -76,6 +76,9 @@ class Paula2Top(Elaboratable):
 
         period_cc = int(midi_cfg["paula_channels"][0].get("period_cc", 74))
         volume_cc = int(midi_cfg["paula_channels"][0]["volume_cc"])
+        sample_cfg = midi_cfg.get("samples", [{"record_note": 44, "play_note": 36}])[0]
+        record_note = int(sample_cfg.get("record_note", 44))
+        play_note = int(sample_cfg.get("play_note", 36))
         self.register_mappings = {
             "AUD0PER": RegisterMapping(
                 enc_range=(0, 127),
@@ -89,7 +92,7 @@ class Paula2Top(Elaboratable):
             ),
         }
 
-        m.submodules.midi_proc = MidiProcessing(
+        m.submodules.midi_proc = midi_proc = MidiProcessing(
             midi_channel=int(midi_cfg["midi_channel"]),
             cc_mapping={
                 period_cc: self.register_mappings["AUD0PER"],
@@ -134,6 +137,8 @@ class Paula2Top(Elaboratable):
 
         dmal0_prev = Signal(init=0)
         sample_tick = Signal()
+        record_toggle_evt = Signal()
+        playback_evt = Signal()
 
         sample_width = ASQ.as_shape().width
         in_shift = max(sample_width - 8, 0)
@@ -149,11 +154,15 @@ class Paula2Top(Elaboratable):
             pmod0.i_cal.valid.eq(1),
             pmod0.codec_mute.eq(0),
             sample_tick.eq(pmod0.o_cal.valid),
+            record_toggle_evt.eq(
+                midi_proc.o_note_on_valid & (midi_proc.o_note == record_note)
+            ),
+            playback_evt.eq(midi_proc.o_note_on_valid & (midi_proc.o_note == play_note)),
             raw_in0.eq(pmod0.o_cal.payload[0].as_value()),
             in0_s8.eq(raw_in0 >> in_shift),
             pa_l.eq(paudio.ldata.as_signed()),
             pa_r.eq(paudio.rdata.as_signed()),
-            pa_rst.eq((reset_ctr != 0) | (~fake_agnus.o_capture_done)),
+            pa_rst.eq(reset_ctr != 0),
             pmod0.i_cal.payload[0].as_value().eq(pa_l << out_shift),
             pmod0.i_cal.payload[1].as_value().eq(pa_r << out_shift),
             pmod0.i_cal.payload[2].as_value().eq(0),
@@ -175,6 +184,8 @@ class Paula2Top(Elaboratable):
             fake_agnus.i_reset.eq(reset_ctr != 0),
             fake_agnus.i_audio_dmal.eq(paudio.dmal[0]),
             fake_agnus.i_audio_dmas.eq(paudio.dmas[0]),
+            fake_agnus.i_record_toggle_evt.eq(record_toggle_evt),
+            fake_agnus.i_playback_evt.eq(playback_evt),
             fake_agnus.i_sample_tick.eq(sample_tick),
             fake_agnus.i_sample_in.eq(in0_s8.as_unsigned()),
             fake_agnus.i_reg_write.eq(reg_write),
@@ -259,13 +270,22 @@ class Paula2Top(Elaboratable):
                             reg_data.eq(self.PAULA_LENGTH_WORDS),
                             reg_write.eq(1),
                             config_state.eq(4),
-                            dma_prime_writes.eq(4 if self.USE_CPU_FEED else 12),
+                            dma_prime_writes.eq(8 if self.USE_CPU_FEED else 12),
                             write_hold.eq(1),
                         ]
                     with m.Case(4):
                         aud0per = self.register_mappings["AUD0PER"]
                         aud0vol = self.register_mappings["AUD0VOL"]
-                        with m.If(aud0per.target != aud0per.written):
+                        with m.If(self.USE_CPU_FEED & (dma_prime_writes != 0)):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD0DAT),
+                                reg_data.eq(fake_agnus.o_audio_data0),
+                                reg_write.eq(1),
+                                dma_prime_writes.eq(dma_prime_writes - 1),
+                                cpu_feed_ctr.eq(0),
+                                write_hold.eq(0),
+                            ]
+                        with m.Elif(aud0per.target != aud0per.written):
                             m.d.sync += [
                                 reg_addr.eq(self.AUD0PER),
                                 reg_data.eq(aud0per.target),
@@ -281,15 +301,6 @@ class Paula2Top(Elaboratable):
                                 reg_write.eq(1),
                                 aud0vol.written.eq(aud0vol.target),
                                 write_hold.eq(0 if self.USE_CPU_FEED else 1),
-                            ]
-                        with m.Elif(self.USE_CPU_FEED & (dma_prime_writes != 0)):
-                            m.d.sync += [
-                                reg_addr.eq(self.AUD0DAT),
-                                reg_data.eq(fake_agnus.o_audio_data0),
-                                reg_write.eq(1),
-                                dma_prime_writes.eq(dma_prime_writes - 1),
-                                cpu_feed_ctr.eq(0),
-                                write_hold.eq(0),
                             ]
                         with m.Elif(
                             self.USE_CPU_FEED

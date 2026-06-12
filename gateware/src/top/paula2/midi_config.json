@@ -1,5 +1,11 @@
 {
   "midi_channel": 0,
+  "samples": [
+    {
+      "record_note": 44,
+      "play_note": 36
+    }
+  ],
   "paula_channels": [
     {
       "period_cc": 74,

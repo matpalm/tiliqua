@@ -29,7 +29,9 @@ class RegisterMapping(object):
 
         max_val = max(self.lut_values)
         self.target = Signal(range(max_val + 1), init=reg_init)
-        self.written = Signal(range(max_val + 1), init=0)
+        # Start "written" at the same value to avoid unnecessary startup rewrites
+        # that can momentarily steal cycles from AUD0DAT feeding.
+        self.written = Signal(range(max_val + 1), init=reg_init)
 
     def _build_lut_values(self):
         if self.lut_len == 1:
@@ -91,7 +93,7 @@ class RegisterMapping(object):
 
 
 class MidiProcessing(Elaboratable):
-    """TRS MIDI RX + decode with CONTROL_CHANGE handling for a single channel."""
+    """TRS MIDI RX + decode with NOTE_ON and CONTROL_CHANGE handling."""
 
     def __init__(
         self,
@@ -103,6 +105,9 @@ class MidiProcessing(Elaboratable):
         self.cc_mapping = cc_mapping or {}
         self.system_clk_hz = system_clk_hz
 
+        self.o_note_on_valid = Signal()
+        self.o_note = Signal(unsigned(8))
+
     def elaborate(self, platform):
         m = Module()
 
@@ -113,11 +118,24 @@ class MidiProcessing(Elaboratable):
         m.submodules.midi_decode = midi_decode = tiliqua_midi.MidiDecodeSerial()
         wiring.connect(m, serialrx.o, midi_decode.i)
 
-        m.d.comb += midi_decode.o.ready.eq(1)
+        m.d.comb += [
+            midi_decode.o.ready.eq(1),
+            self.o_note_on_valid.eq(0),
+            self.o_note.eq(0),
+        ]
 
         with m.If(midi_decode.o.valid):
             msg = midi_decode.o.payload
             with m.If(
+                (msg.status.kind == tiliqua_midi.Status.Kind.NOTE_ON)
+                & (msg.status.nibble.channel == self.midi_channel)
+                & (msg.midi_payload.note_on.velocity != 0)
+            ):
+                m.d.comb += [
+                    self.o_note_on_valid.eq(1),
+                    self.o_note.eq(msg.midi_payload.note_on.note),
+                ]
+            with m.Elif(
                 (msg.status.kind == tiliqua_midi.Status.Kind.CONTROL_CHANGE)
                 & (msg.status.nibble.channel == self.midi_channel)
             ):

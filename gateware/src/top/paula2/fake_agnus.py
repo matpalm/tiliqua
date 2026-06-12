@@ -7,7 +7,8 @@ from amaranth.lib.wiring import In, Out
 class FakeAgnus(wiring.Component):
     """Minimal Agnus-side model for Paula AUD0DAT feeding.
 
-    Captures 1 second of input at startup, then replays that buffer.
+    Captures from input when record toggle is active, then replays that buffer
+    when playback is toggled on.
     Playback rate modulation is driven by AUD0PER programming in top.py.
     Each AUD0DAT word is packed as two consecutive sample bytes.
     """
@@ -41,6 +42,8 @@ class FakeAgnus(wiring.Component):
     i_reset: In(1)
     i_audio_dmal: In(1)
     i_audio_dmas: In(1)
+    i_record_toggle_evt: In(1)
+    i_playback_evt: In(1)
     i_sample_tick: In(1)
     i_sample_in: In(unsigned(8))
 
@@ -61,9 +64,11 @@ class FakeAgnus(wiring.Component):
         wr = sample_mem.write_port()
         rd = sample_mem.read_port()
 
-        capturing = Signal(init=1)
+        recording = Signal(init=0)
+        playback_enabled = Signal(init=0)
         capture_count = Signal(range(self.CAPTURE_BYTES + 1), init=0)
         capture_word_ptr = Signal(range(self.CAPTURE_WORDS), init=0)
+        valid_words = Signal(range(self.CAPTURE_WORDS + 1), init=0)
         capture_half = Signal(init=0)
         capture_first = Signal(unsigned(8), init=0)
         capture_acc = Signal(range(self.CAPTURE_DEN), init=0)
@@ -74,8 +79,8 @@ class FakeAgnus(wiring.Component):
         phase_inc = Signal(unsigned(self.PHASE_WIDTH))
         phase_next = Signal(unsigned(self.PHASE_WIDTH))
         phase_wrap = Signal(unsigned(self.PHASE_WIDTH))
-
-        mem_limit_phase = Const(self.CAPTURE_WORDS << self.FRAC_BITS, self.PHASE_WIDTH)
+        mem_limit_words = Signal(range(self.CAPTURE_WORDS + 1))
+        mem_limit_phase = Signal(unsigned(self.PHASE_WIDTH))
 
         dat_write = Signal()
         dat_write_prev = Signal(init=0)
@@ -86,7 +91,7 @@ class FakeAgnus(wiring.Component):
             dat_write_edge.eq(dat_write & ~dat_write_prev),
             capture_strobe.eq(
                 self.i_sample_tick
-                & capturing
+                & recording
                 & (capture_count < self.CAPTURE_BYTES)
                 & (capture_acc >= self.CAPTURE_EDGE)
             ),
@@ -95,9 +100,19 @@ class FakeAgnus(wiring.Component):
             wr.data.eq(Cat(self.i_sample_in, capture_first)),
             rd.en.eq(1),
             rd.addr.eq(play_word_addr),
-            self.o_audio_data0.eq(Mux(capturing, C(0, 16), rd.data)),
-            self.o_capture_done.eq(~capturing),
+            self.o_audio_data0.eq(
+                Mux(playback_enabled & (valid_words != 0), rd.data, C(0, 16))
+            ),
+            self.o_capture_done.eq(~recording),
             self.o_phase_inc.eq(phase_inc),
+            mem_limit_words.eq(
+                Mux(
+                    valid_words == 0,
+                    C(1, mem_limit_words.shape().width),
+                    valid_words,
+                )
+            ),
+            mem_limit_phase.eq(mem_limit_words << self.FRAC_BITS),
             phase_next.eq(phase + phase_inc),
             phase_wrap.eq(phase_next - mem_limit_phase),
         ]
@@ -108,9 +123,11 @@ class FakeAgnus(wiring.Component):
 
         with m.If(self.i_reset):
             m.d.sync += [
-                capturing.eq(1),
+                recording.eq(0),
+                playback_enabled.eq(0),
                 capture_count.eq(0),
                 capture_word_ptr.eq(0),
+                valid_words.eq(0),
                 capture_half.eq(0),
                 capture_first.eq(0),
                 capture_acc.eq(0),
@@ -118,8 +135,37 @@ class FakeAgnus(wiring.Component):
                 phase.eq(0),
             ]
         with m.Else():
+            with m.If(self.i_record_toggle_evt):
+                with m.If(recording):
+                    m.d.sync += [
+                        recording.eq(0),
+                        capture_half.eq(0),
+                    ]
+                with m.Else():
+                    m.d.sync += [
+                        recording.eq(1),
+                        playback_enabled.eq(0),
+                        capture_count.eq(0),
+                        capture_word_ptr.eq(0),
+                        valid_words.eq(0),
+                        capture_half.eq(0),
+                        capture_first.eq(0),
+                        capture_acc.eq(0),
+                        play_word_addr.eq(0),
+                        phase.eq(0),
+                    ]
+            with m.Elif(self.i_playback_evt):
+                with m.If(playback_enabled):
+                    m.d.sync += playback_enabled.eq(0)
+                with m.Elif(valid_words != 0):
+                    m.d.sync += [
+                        playback_enabled.eq(1),
+                        play_word_addr.eq(0),
+                        phase.eq(0),
+                    ]
+
             with m.If(
-                self.i_sample_tick & capturing & (capture_count < self.CAPTURE_BYTES)
+                self.i_sample_tick & recording & (capture_count < self.CAPTURE_BYTES)
             ):
                 with m.If(capture_strobe):
                     m.d.sync += [
@@ -133,20 +179,22 @@ class FakeAgnus(wiring.Component):
                             capture_half.eq(1),
                         ]
                     with m.Else():
-                        m.d.sync += capture_half.eq(0)
+                        m.d.sync += [
+                            capture_half.eq(0),
+                            valid_words.eq(capture_word_ptr + 1),
+                        ]
                         with m.If(capture_word_ptr < (self.CAPTURE_WORDS - 1)):
                             m.d.sync += capture_word_ptr.eq(capture_word_ptr + 1)
 
                     with m.If((capture_count + 1) >= self.CAPTURE_BYTES):
                         m.d.sync += [
-                            capturing.eq(0),
-                            phase.eq(0),
-                            play_word_addr.eq(0),
+                            recording.eq(0),
+                            capture_half.eq(0),
                         ]
                 with m.Else():
                     m.d.sync += capture_acc.eq(capture_acc + self.CAPTURE_NUM)
 
-            with m.If(dat_write_edge & ~capturing):
+            with m.If(dat_write_edge & playback_enabled & (valid_words != 0)):
                 with m.If(phase_next >= mem_limit_phase):
                     m.d.sync += [
                         phase.eq(phase_wrap),

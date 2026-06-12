@@ -15,4 +15,4 @@ so hackily bring it in explicitly here ( ? )
   - `attach_sample`
 - modulation behavior in `paula_audio_channel.v`:
   - volume can be sourced from attached channel sample (`attach_sample[6:0]`).
-  - period can be sourced from attached channel sample (`{8'h00, attach_sample} + 1`).
+  - period modulation is centered around AUDxPER using attached sample as a signed delta, with saturation.

@@ -77,6 +77,9 @@ reg silence_d;  // AMR: disable audio if repeat length is 1
 reg dmaena_d;
 wire   [6:0] audvol_eff;
 wire  [15:0] audper_eff;
+wire signed [9:0] attach_per_delta;
+wire signed [17:0] audper_mod;
+wire [15:0] audper_mod_sat;
 
 
 //length register bus write
@@ -138,7 +141,13 @@ assign  AUDxIP = intpen;  //audio interrupt pending
 assign intreq = AUDxIR;    //audio interrupt request
 
 assign audvol_eff[6:0] = attach_vol_en ? attach_sample[6:0] : audvol[6:0];
-assign audper_eff[15:0] = attach_per_en ? ({8'h00, attach_sample[7:0]} + 16'h0001) : audper[15:0];
+assign attach_per_delta = $signed({1'b0, attach_sample}) - 10'sd128;
+assign audper_mod = $signed({2'b00, audper}) + (attach_per_delta <<< 6);
+assign audper_mod_sat =
+  (audper_mod < 18'sd121) ? 16'd121 :
+  (audper_mod > 18'sd65535) ? 16'hffff :
+  audper_mod[15:0];
+assign audper_eff[15:0] = attach_per_en ? audper_mod_sat : audper[15:0];
 
 
 //volume counter

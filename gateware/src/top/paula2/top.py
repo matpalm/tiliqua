@@ -114,11 +114,6 @@ class Paula2Top(Elaboratable):
         # period_cc2 = midi_cfg["paula_channels"][2]["period_cc"]
         # volume_cc2 = midi_cfg["paula_channels"][2]["volume_cc"]
 
-        atvol0_note = midi_cfg["modulation"][0]["toggle_volume_note"]
-        atper0_note = midi_cfg["modulation"][0]["toggle_period_note"]
-        atvol1_note = midi_cfg["modulation"][1]["toggle_volume_note"]
-        atper1_note = midi_cfg["modulation"][1]["toggle_period_note"]
-
         reset_cfg = midi_cfg.get("reset", {})
         reset_audx_note = reset_cfg.get("AUDx???")
         reset_atxxx_note = reset_cfg.get("AT???x")
@@ -145,46 +140,6 @@ class Paula2Top(Elaboratable):
                 enc_range=(0, 127), reg_range=(0, 64), reg_init=64
             )
 
-            # "AUD1PER": RegisterMapping(
-            #     enc_range=(0, 127),
-            #     reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
-            #     reg_init=self.PAULA_BASE_PERIOD,
-            #     mapping="exp",
-            #     anchor=(64, self.PAULA_BASE_PERIOD),
-            # ),
-            # "AUD0VOL": RegisterMapping(
-            #     enc_range=(0, 127), reg_range=(0, 64), reg_init=64
-            # ),
-            # "AUD1VOL": RegisterMapping(
-            #     enc_range=(0, 127), reg_range=(0, 64), reg_init=64
-            # ),
-            # "AUD2PER": RegisterMapping(
-            #     enc_range=(0, 127),
-            #     reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
-            #     reg_init=self.PAULA_BASE_PERIOD,
-            #     mapping="exp",
-            #     anchor=(64, self.PAULA_BASE_PERIOD),
-        #     # ),
-        #     "AUD2VOL": RegisterMapping(
-        #         enc_range=(0, 127), reg_range=(0, 64), reg_init=64
-        #     ),
-        #     "AUD0LEN": RegisterMapping(
-        #         enc_range=(0, 127),
-        #         reg_range=(1, self.PAULA_LENGTH_WORDS),
-        #         reg_init=self.PAULA_LENGTH_WORDS,
-        #     ),
-        #     "AUD1LEN": RegisterMapping(
-        #         enc_range=(0, 127),
-        #         reg_range=(1, self.PAULA_LENGTH_WORDS),
-        #         reg_init=self.PAULA_LENGTH_WORDS,
-        #     ),
-        #     "AUD2LEN": RegisterMapping(
-        #         enc_range=(0, 127),
-        #         reg_range=(1, self.PAULA_LENGTH_WORDS),
-        #         reg_init=self.PAULA_LENGTH_WORDS,
-        #     ),
-        # }
-
         cc_mapping = {}  # o_O urgh
         for i in range(self.NUM_CH):
             cc = midi_cfg["paula_channels"][i]["length_cc"]
@@ -193,16 +148,6 @@ class Paula2Top(Elaboratable):
             cc_mapping[cc] = self.register_mappings[f"AUD{i}PER"]
             cc = midi_cfg["paula_channels"][i]["volume_cc"]
             cc_mapping[cc] = self.register_mappings[f"AUD{i}VOL"]
-        #     length_cc0: self.register_mappings["AUD0LEN"],
-        #     period_cc0: self.register_mappings["AUD0PER"],
-        #     volume_cc0: self.register_mappings["AUD0VOL"],
-        #     length_cc1: self.register_mappings["AUD1LEN"],
-        #     period_cc1: self.register_mappings["AUD1PER"],
-        #     volume_cc1: self.register_mappings["AUD1VOL"],
-        #     length_cc2: self.register_mappings["AUD2LEN"],
-        #     period_cc2: self.register_mappings["AUD2PER"],
-        #     volume_cc2: self.register_mappings["AUD2VOL"],
-        # }
 
         m.submodules.midi_proc = midi_proc = MidiProcessing(
             midi_channel=int(midi_cfg["midi_channel"]),
@@ -245,11 +190,6 @@ class Paula2Top(Elaboratable):
         fake_agnus1 = fake_agni[1]
         fake_agnus2 = fake_agni[2]
 
-        # m.submodules.fake_agnus2 = fake_agnus2 = FakeAgnus(
-        #     aud_dat_addr=FakeAgnus.AUD2DAT,
-        #     aud_len_addr=FakeAgnus.AUD2LEN,
-        # )
-
         config_state = Signal(unsigned(4), init=0)
         reg_addr = Signal(unsigned(8), init=0)
         reg_data = Signal(unsigned(16), init=0)
@@ -282,13 +222,6 @@ class Paula2Top(Elaboratable):
         record_toggle_evts = [Signal() for _ in range(self.NUM_CH)]
         playback_evts = [Signal() for _ in range(self.NUM_CH)]
 
-        # record_toggle_evt0 = record_toggle_evts[0]
-        # playback_evt0 = playback_evts[0]
-        # record_toggle_evt1 = record_toggle_evts[1]
-        # playback_evt1 = playback_evts[1]
-        # record_toggle_evt2 = record_toggle_evts[2]
-        # playback_evt2 = playback_evts[2]
-
         reset_audx_evt = Signal()
         reset_atxxx_evt = Signal()
 
@@ -296,14 +229,8 @@ class Paula2Top(Elaboratable):
         in_shift = max(sample_width - 8, 0)
 
         raw_ins = [Signal(signed(sample_width)) for _ in range(self.NUM_CH)]
-        # raw_in0 = raw_ins[0]
-        # raw_in1 = raw_ins[1]
-        # raw_in2 = raw_ins[2]
 
         inN_s8 = [Signal(signed(8)) for _ in range(self.NUM_CH)]
-        # in0_s8 = inN_s8[0]
-        # in1_s8 = inN_s8[1]
-        # in2_s8 = inN_s8[2]
 
         pa_l = Signal(signed(15))
         pa_r = Signal(signed(15))
@@ -330,20 +257,6 @@ class Paula2Top(Elaboratable):
                 ),
             ]
 
-        #     record_toggle_evt1.eq(
-        #         midi_proc.o_note_on_valid & (midi_proc.o_note == record_note1)
-        #     ),
-        #     playback_evt1.eq(
-        #         midi_proc.o_note_on_valid & (midi_proc.o_note == play_note1)
-        #     ),
-        #     record_toggle_evt2.eq(
-        #         midi_proc.o_note_on_valid & (midi_proc.o_note == record_note2)
-        #     ),
-        #     playback_evt2.eq(
-        #         midi_proc.o_note_on_valid & (midi_proc.o_note == play_note2)
-        #     ),
-        # ]
-
         m.d.comb += [
             reset_audx_evt.eq(
                 C(0, 1)
@@ -365,24 +278,11 @@ class Paula2Top(Elaboratable):
 
         for reg in self.register_mappings.keys():
             m.d.comb += self.register_mappings[reg].reset_to_init.eq(reset_audx_evt)
-        #     self.register_mappings["AUD1PER"].reset_to_init.eq(reset_audx_evt),
-        #     self.register_mappings["AUD2PER"].reset_to_init.eq(reset_audx_evt),
-        #     self.register_mappings["AUD0VOL"].reset_to_init.eq(reset_audx_evt),
-        #     self.register_mappings["AUD1VOL"].reset_to_init.eq(reset_audx_evt),
-        #     self.register_mappings["AUD2VOL"].reset_to_init.eq(reset_audx_evt),
-        #     self.register_mappings["AUD0LEN"].reset_to_init.eq(reset_audx_evt),
-        #     self.register_mappings["AUD1LEN"].reset_to_init.eq(reset_audx_evt),
-        #     self.register_mappings["AUD2LEN"].reset_to_init.eq(reset_audx_evt),
-        # ]
 
         for i in range(self.NUM_CH):
             m.d.comb += [
                 raw_ins[i].eq(pmod0.o_cal.payload[i].as_value()),
-                # raw_in1.eq(pmod0.o_cal.payload[1].as_value()),
-                # raw_in2.eq(pmod0.o_cal.payload[2].as_value()),
                 inN_s8[i].eq(raw_ins[i] >> in_shift),
-                # in1_s8.eq(raw_in1 >> in_shift),
-                # in2_s8.eq(raw_in2 >> in_shift),
             ]
 
         m.d.comb += [
@@ -446,27 +346,6 @@ class Paula2Top(Elaboratable):
                 fake_agni[i].i_reg_addr.eq(reg_addr),
                 fake_agni[i].i_reg_data.eq(reg_data),
             ]
-        #     fake_agnus1.i_reset.eq(reset_ctr != 0),
-        #     fake_agnus1.i_audio_dmal.eq(paudio.dmal[1]),
-        #     fake_agnus1.i_audio_dmas.eq(paudio.dmas[1]),
-        #     fake_agnus1.i_record_toggle_evt.eq(record_toggle_evt1),
-        #     fake_agnus1.i_playback_evt.eq(playback_evt1),
-        #     fake_agnus1.i_sample_tick.eq(sample_tick),
-        #     fake_agnus1.i_sample_in.eq(in1_s8.as_unsigned()),
-        #     fake_agnus1.i_reg_write.eq(reg_write),
-        #     fake_agnus1.i_reg_addr.eq(reg_addr),
-        #     fake_agnus1.i_reg_data.eq(reg_data),
-        #     fake_agnus2.i_reset.eq(reset_ctr != 0),
-        #     fake_agnus2.i_audio_dmal.eq(paudio.dmal[2]),
-        #     fake_agnus2.i_audio_dmas.eq(paudio.dmas[2]),
-        #     fake_agnus2.i_record_toggle_evt.eq(record_toggle_evt2),
-        #     fake_agnus2.i_playback_evt.eq(playback_evt2),
-        #     fake_agnus2.i_sample_tick.eq(sample_tick),
-        #     fake_agnus2.i_sample_in.eq(in2_s8.as_unsigned()),
-        #     fake_agnus2.i_reg_write.eq(reg_write),
-        #     fake_agnus2.i_reg_addr.eq(reg_addr),
-        #     fake_agnus2.i_reg_data.eq(reg_data),
-        # ]
 
         m.d.comb += [
             adkcon_bits_to_set.eq(adkcon_target_bits & ~adkcon_written_bits),
@@ -474,39 +353,42 @@ class Paula2Top(Elaboratable):
             strhor_pulse.eq(clk7_en_pulse & (strhor_div == 479)),
         ]
 
+        # TODO. this could be looped?  am currently explicitly mapping out bit values :/
+
+        atvol0_note = midi_cfg["modulation"][0]["toggle_volume_note"]
+        atper0_note = midi_cfg["modulation"][0]["toggle_period_note"]
+        atvol1_note = midi_cfg["modulation"][1]["toggle_volume_note"]
+        atper1_note = midi_cfg["modulation"][1]["toggle_period_note"]
+
         toggle_mask_val = 0
-        if atvol0_note is not None:
-            toggle_mask_val = toggle_mask_val | (
-                Mux(
-                    midi_proc.o_note_on_valid & (midi_proc.o_note == int(atvol0_note)),
-                    C(0x01, 8),
-                    C(0x00, 8),
-                )
+        toggle_mask_val = toggle_mask_val | (
+            Mux(
+                midi_proc.o_note_on_valid & (midi_proc.o_note == int(atvol0_note)),
+                C(0x01, 8),
+                C(0x00, 8),
             )
-        if atper0_note is not None:
-            toggle_mask_val = toggle_mask_val | (
-                Mux(
-                    midi_proc.o_note_on_valid & (midi_proc.o_note == int(atper0_note)),
-                    C(0x10, 8),
-                    C(0x00, 8),
-                )
+        )
+        toggle_mask_val = toggle_mask_val | (
+            Mux(
+                midi_proc.o_note_on_valid & (midi_proc.o_note == int(atper0_note)),
+                C(0x10, 8),
+                C(0x00, 8),
             )
-        if atvol1_note is not None:
-            toggle_mask_val = toggle_mask_val | (
-                Mux(
-                    midi_proc.o_note_on_valid & (midi_proc.o_note == int(atvol1_note)),
-                    C(0x02, 8),
-                    C(0x00, 8),
-                )
+        )
+        toggle_mask_val = toggle_mask_val | (
+            Mux(
+                midi_proc.o_note_on_valid & (midi_proc.o_note == int(atvol1_note)),
+                C(0x02, 8),
+                C(0x00, 8),
             )
-        if atper1_note is not None:
-            toggle_mask_val = toggle_mask_val | (
-                Mux(
-                    midi_proc.o_note_on_valid & (midi_proc.o_note == int(atper1_note)),
-                    C(0x20, 8),
-                    C(0x00, 8),
-                )
+        )
+        toggle_mask_val = toggle_mask_val | (
+            Mux(
+                midi_proc.o_note_on_valid & (midi_proc.o_note == int(atper1_note)),
+                C(0x20, 8),
+                C(0x00, 8),
             )
+        )
         m.d.comb += adkcon_toggle_mask.eq(toggle_mask_val)
 
         with m.If(reset_ctr != 0):

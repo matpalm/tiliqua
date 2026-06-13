@@ -33,11 +33,10 @@ class Paula2Top(Elaboratable):
     NUM_CH = 3
 
     PAULA_CCK_HZ = 60_000_000 // 8
-    PAULA_MIN_PERIOD = 121
+    PAULA_MIN_PERIOD = 121  # TODO: tune this more ?
     PAULA_MAX_PERIOD = 0xFFFF
 
-    # Keep default period aligned with FakeAgnus capture-rate decimation.
-    PAULA_BASE_PERIOD = FakeAgnus.DEFAULT_AUD0PER
+    PAULA_BASE_PERIOD = FakeAgnus.DEFAULT_AUDxPER
     PAULA_MIDI_FAST_PERIOD = PAULA_MIN_PERIOD
     PAULA_MIDI_SLOW_PERIOD = PAULA_MAX_PERIOD
     PAULA_LENGTH_WORDS = FakeAgnus.CAPTURE_WORDS
@@ -222,20 +221,20 @@ class Paula2Top(Elaboratable):
         fake_agni = []
         fake_agni.append(
             FakeAgnus(
-                aud_dat_addr=FakeAgnus.AUD0DAT,
-                aud_len_addr=FakeAgnus.AUD0LEN,
+                aud_len_addr=self.AUD0LEN,
+                aud_dat_addr=self.AUD0DAT,
             )
         )
         fake_agni.append(
             FakeAgnus(
-                aud_dat_addr=FakeAgnus.AUD1DAT,
-                aud_len_addr=FakeAgnus.AUD1LEN,
+                aud_len_addr=self.AUD1LEN,
+                aud_dat_addr=self.AUD1DAT,
             )
         )
         fake_agni.append(
             FakeAgnus(
-                aud_dat_addr=FakeAgnus.AUD2DAT,
-                aud_len_addr=FakeAgnus.AUD2LEN,
+                aud_len_addr=self.AUD2LEN,
+                aud_dat_addr=self.AUD2DAT,
             )
         )
         assert len(fake_agni) == self.NUM_CH

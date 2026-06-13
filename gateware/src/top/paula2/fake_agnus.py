@@ -22,38 +22,35 @@ class FakeAgnus(wiring.Component):
     Each AUD0DAT word is packed as two consecutive sample bytes.
     """
 
-    AUD0LEN = 0x52
-    AUD0DAT = 0x55
-    AUD1LEN = 0x5A
-    AUD1DAT = 0x5D
-    AUD2LEN = 0x62
-    AUD2DAT = 0x65
-    AUD3LEN = 0x6A
-    AUD3DAT = 0x6D
+    # AUD0LEN = 0x52
+    # AUD0DAT = 0x55
+    # AUD1LEN = 0x5A
+    # AUD1DAT = 0x5D
+    # AUD2LEN = 0x62
+    # AUD2DAT = 0x65
+    # AUD3LEN = 0x6A
+    # AUD3DAT = 0x6D
 
     PHASE_WIDTH = 32
     FRAC_BITS = 16
 
     PHASE_INC_1X = 1 << FRAC_BITS
     PAULA_CCK_HZ = 60_000_000 // 8
-    # Keep this in sync with Paula2Top.PAULA_BASE_PERIOD.
-    DEFAULT_AUD0PER = 320
+    DEFAULT_AUDxPER = 320
 
     INPUT_SAMPLE_HZ = 48_000
     CAPTURE_SECONDS = 1
 
-    # Capture at the default AUD0PER byte rate so DFT playback cadence
-    # matches recorded sample cadence.
-    CAPTURE_BYTES = (
-        (PAULA_CCK_HZ * CAPTURE_SECONDS) // (2 * DEFAULT_AUD0PER) // 2
-    ) * 2
+    # capture at the default AUDxPER byte rate so dft playback rate
+    # matches recorded sample rate.
+    CAPTURE_BYTES = ((PAULA_CCK_HZ * CAPTURE_SECONDS) // (2 * DEFAULT_AUDxPER) // 2) * 2
     CAPTURE_WORDS = CAPTURE_BYTES // 2
 
-    # Exact fractional capture strobe ratio over i_sample_tick events:
+    # fractional capture strobe ratio over i_sample_tick events:
     # (PAULA_CCK_HZ / (2 * DEFAULT_AUD0PER)) / INPUT_SAMPLE_HZ.
 
     CAPTURE_NUM = PAULA_CCK_HZ
-    CAPTURE_DEN = 2 * DEFAULT_AUD0PER * INPUT_SAMPLE_HZ
+    CAPTURE_DEN = 2 * DEFAULT_AUDxPER * INPUT_SAMPLE_HZ
     CAPTURE_EDGE = CAPTURE_DEN - CAPTURE_NUM
 
     i_reset: In(1)
@@ -72,7 +69,7 @@ class FakeAgnus(wiring.Component):
     o_capture_done: Out(1)
     o_phase_inc: Out(unsigned(PHASE_WIDTH))
 
-    def __init__(self, aud_dat_addr: int = AUD0DAT, aud_len_addr: int | None = None):
+    def __init__(self, aud_dat_addr: int, aud_len_addr: int):
         self.aud_dat_addr = int(aud_dat_addr)
         self.aud_len_addr = int(
             aud_dat_addr - 3 if aud_len_addr is None else aud_len_addr

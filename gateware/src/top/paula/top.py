@@ -1,15 +1,4 @@
-"""Paula standalone with MIDI-controlled record/playback on channels 0 -> 3
-
-Record/play notes and CC mappings are loaded from local midi_config.json.
-
-Channel N captures from inN.
-
-AUDxDAT is serviced from Paula DMA requests, with startup priming writes.
-
-Outputs:
-- out0: Paula left mix (ch0 + ch3)
-- out1: Paula right mix (ch1 + ch2)
-"""
+"""Paula standalone with MIDI-controlled record/playback on channels 0 -> 3"""
 
 import json
 from pathlib import Path
@@ -95,23 +84,6 @@ class Paula2Top(Elaboratable):
             midi_cfg["samples"][i]["record_note"] for i in range(self.NUM_CH)
         ]
         play_notes = [midi_cfg["samples"][i]["play_note"] for i in range(self.NUM_CH)]
-
-        # record_note0 = midi_cfg["samples"][0]["record_note"]
-        # play_note0 = midi_cfg["samples"][0]["play_note"]
-        # record_note1 = midi_cfg["samples"][1]["record_note"]
-        # play_note1 = midi_cfg["samples"][1]["play_note"]
-        # record_note2 = midi_cfg["samples"][2]["record_note"]
-        # play_note2 = midi_cfg["samples"][2]["play_note"]
-
-        # length_cc0 = midi_cfg["paula_channels"][0]["length_cc"]
-        # period_cc0 = midi_cfg["paula_channels"][0]["period_cc"]
-        # volume_cc0 = midi_cfg["paula_channels"][0]["volume_cc"]
-        # length_cc1 = midi_cfg["paula_channels"][1]["length_cc"]
-        # period_cc1 = midi_cfg["paula_channels"][1]["period_cc"]
-        # volume_cc1 = midi_cfg["paula_channels"][1]["volume_cc"]
-        # length_cc2 = midi_cfg["paula_channels"][2]["length_cc"]
-        # period_cc2 = midi_cfg["paula_channels"][2]["period_cc"]
-        # volume_cc2 = midi_cfg["paula_channels"][2]["volume_cc"]
 
         reset_cfg = midi_cfg.get("reset", {})
         reset_audx_note = reset_cfg.get("AUDx???")
@@ -499,6 +471,8 @@ class Paula2Top(Elaboratable):
                         paudio.dmal[0], paudio.dmal[1], paudio.dmal[2], paudio.dmal[3]
                     )
                 )
+
+        # TODO: must be a way to clean up the numerous copy pasta examples below :/
 
         with m.If(clk7_en_pulse):
             m.d.sync += [

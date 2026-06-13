@@ -1,7 +1,7 @@
 # paula2 minimig RTL snapshot
 
 might be wrong but the channel.v says attached modes not supported
-so hackily bring it in explicitly here ( ? )
+so hackily bring it in explicitly here to make some minor mods
 
 - added ADKCON audio attach-bit handling in `paula_audio.v` (ADKCON[7:0], set/clear semantics).
 - attach modulation ch-to-ch paths in `paula_audio.v`:

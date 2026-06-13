@@ -109,6 +109,10 @@ class Paula2Top(Elaboratable):
         atvol1_note = midi_cfg["modulation"][1]["toggle_volume_note"]
         atper1_note = midi_cfg["modulation"][1]["toggle_period_note"]
 
+        reset_cfg = midi_cfg.get("reset", {})
+        reset_audx_note = reset_cfg.get("AUDx???")
+        reset_atxxx_note = reset_cfg.get("AT???x")
+
         adkcon_audio_set_bits = int(midi_cfg.get("adkcon_audio_set_bits", 0)) & 0xFF
 
         self.register_mappings = {
@@ -210,6 +214,8 @@ class Paula2Top(Elaboratable):
         playback_evt1 = Signal()
         record_toggle_evt2 = Signal()
         playback_evt2 = Signal()
+        reset_audx_evt = Signal()
+        reset_atxxx_evt = Signal()
 
         sample_width = ASQ.as_shape().width
         in_shift = max(sample_width - 8, 0)
@@ -251,6 +257,28 @@ class Paula2Top(Elaboratable):
             playback_evt2.eq(
                 midi_proc.o_note_on_valid & (midi_proc.o_note == play_note2)
             ),
+            reset_audx_evt.eq(
+                C(0, 1)
+                if reset_audx_note is None
+                else (
+                    midi_proc.o_note_on_valid
+                    & (midi_proc.o_note == int(reset_audx_note))
+                )
+            ),
+            reset_atxxx_evt.eq(
+                C(0, 1)
+                if reset_atxxx_note is None
+                else (
+                    midi_proc.o_note_on_valid
+                    & (midi_proc.o_note == int(reset_atxxx_note))
+                )
+            ),
+            self.register_mappings["AUD0PER"].reset_to_init.eq(reset_audx_evt),
+            self.register_mappings["AUD1PER"].reset_to_init.eq(reset_audx_evt),
+            self.register_mappings["AUD2PER"].reset_to_init.eq(reset_audx_evt),
+            self.register_mappings["AUD0VOL"].reset_to_init.eq(reset_audx_evt),
+            self.register_mappings["AUD1VOL"].reset_to_init.eq(reset_audx_evt),
+            self.register_mappings["AUD2VOL"].reset_to_init.eq(reset_audx_evt),
             raw_in0.eq(pmod0.o_cal.payload[0].as_value()),
             raw_in1.eq(pmod0.o_cal.payload[1].as_value()),
             raw_in2.eq(pmod0.o_cal.payload[2].as_value()),
@@ -401,6 +429,8 @@ class Paula2Top(Elaboratable):
                 adkcon_target_bits.eq(adkcon_audio_set_bits),
                 adkcon_written_bits.eq(0),
             ]
+        with m.Elif(reset_atxxx_evt):
+            m.d.sync += adkcon_target_bits.eq(0)
         with m.Elif(adkcon_toggle_mask != 0):
             m.d.sync += adkcon_target_bits.eq(adkcon_target_bits ^ adkcon_toggle_mask)
 

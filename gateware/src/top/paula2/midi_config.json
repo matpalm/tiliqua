@@ -1,6 +1,10 @@
 {
   "midi_channel": 0,
   "adkcon_audio_set_bits": 0,
+  "reset": {
+    "AUDx???": 48,
+    "AT???x": 40
+  },
   "samples": [
     {
       "record_note": 44,

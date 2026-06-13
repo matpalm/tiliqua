@@ -20,6 +20,7 @@ class RegisterMapping(object):
         self.param_min, self.param_max = reg_range
         self.mapping = mapping
         self.anchor = anchor
+        self.reg_init = int(reg_init)
         self.lut_len = (self.enc_max - self.enc_min) + 1
 
         self.lut_values = self._build_lut_values()
@@ -32,6 +33,7 @@ class RegisterMapping(object):
         # Start "written" at the same value to avoid unnecessary startup rewrites
         # that can momentarily steal cycles from AUD0DAT feeding.
         self.written = Signal(range(max_val + 1), init=reg_init)
+        self.reset_to_init = Signal(init=0)
 
     def _build_lut_values(self):
         if self.lut_len == 1:
@@ -123,6 +125,17 @@ class MidiProcessing(Elaboratable):
             self.o_note_on_valid.eq(0),
             self.o_note.eq(0),
         ]
+
+        unique_mappings = []
+        for mapping in self.cc_mapping.values():
+            if mapping not in unique_mappings:
+                unique_mappings.append(mapping)
+
+        # External reset pulses can force mapped register targets back to
+        # their startup values.
+        for mapping in unique_mappings:
+            with m.If(mapping.reset_to_init):
+                m.d.sync += mapping.target.eq(mapping.reg_init)
 
         with m.If(midi_decode.o.valid):
             msg = midi_decode.o.payload

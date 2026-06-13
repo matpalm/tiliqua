@@ -28,6 +28,8 @@ class FakeAgnus(wiring.Component):
     AUD1DAT = 0x5D
     AUD2LEN = 0x62
     AUD2DAT = 0x65
+    AUD3LEN = 0x6A
+    AUD3DAT = 0x6D
 
     PHASE_WIDTH = 32
     FRAC_BITS = 16

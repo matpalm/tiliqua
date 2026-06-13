@@ -1,16 +1,14 @@
-"""Paula standalone with MIDI-controlled record/playback on channels 0, 1, and 2.
+"""Paula standalone with MIDI-controlled record/playback on channels 0 -> 3
 
 Record/play notes and CC mappings are loaded from local midi_config.json.
-Channel 0 captures from in0.
-Channel 1 captures from in1.
-Channel 2 captures from in2.
+
+Channel N captures from inN.
 
 AUDxDAT is serviced from Paula DMA requests, with startup priming writes.
 
 Outputs:
 - out0: Paula left mix (ch0 + ch3)
-- out1: Paula ch1 only
-- out2: Paula ch2 only
+- out1: Paula right mix (ch1 + ch2)
 """
 
 import json
@@ -43,34 +41,37 @@ class Paula2Top(Elaboratable):
     PAULA_LENGTH_WORDS = FakeAgnus.CAPTURE_WORDS
     PAULA_DMA_ENABLE_MASK = 0b0111
 
-    AUD0LEN = 0x52  # cc10  todo
+    AUD0LEN = 0x52  # cc10
     AUD0PER = 0x53  # cc74
     AUD0VOL = 0x54  # cc71
     AUD0DAT = 0x55
 
-    AUD1LEN = 0x5A  # cc77  todo
+    AUD1LEN = 0x5A  # cc77
     AUD1PER = 0x5B  # cc93
     AUD1VOL = 0x5C  # cc73
     AUD1DAT = 0x5D
 
-    AUD2LEN = 0x62  # todo
+    AUD2LEN = 0x62  # cc114
     AUD2PER = 0x63  # cc18
     AUD2VOL = 0x64  # cc19
     AUD2DAT = 0x65
 
-    # TODO: add AUD3x
+    AUD3LEN = 0x6A  # cc17
+    AUD3PER = 0x6B  # cc91
+    AUD3VOL = 0x6C  # cc79
+    AUD3DAT = 0x6D
 
     ADKCON = 0x4F
 
     bitstream_help = BitstreamHelp(
-        brief="Paula2 ch0/ch1/ch2 note rec/play",
+        brief="Paula2",
         io_left=[
             "audio in 0",
             "audio in 1",
             "audio in 2",
-            "",
-            "paula out 0",
-            "paula out 1",
+            "audio in 3",
+            "paula out L",
+            "paula out R",
             "",
             "",
         ],

@@ -93,12 +93,17 @@ class Paula2Top(Elaboratable):
         with open(Path(__file__).with_name("midi_config.json"), "r") as f:
             midi_cfg = json.loads(f.read())
 
-        record_note0 = midi_cfg["samples"][0]["record_note"]
-        play_note0 = midi_cfg["samples"][0]["play_note"]
-        record_note1 = midi_cfg["samples"][1]["record_note"]
-        play_note1 = midi_cfg["samples"][1]["play_note"]
-        record_note2 = midi_cfg["samples"][2]["record_note"]
-        play_note2 = midi_cfg["samples"][2]["play_note"]
+        record_notes = [
+            midi_cfg["samples"][i]["record_note"] for i in range(self.NUM_CH)
+        ]
+        play_notes = [midi_cfg["samples"][i]["play_note"] for i in range(self.NUM_CH)]
+
+        # record_note0 = midi_cfg["samples"][0]["record_note"]
+        # play_note0 = midi_cfg["samples"][0]["play_note"]
+        # record_note1 = midi_cfg["samples"][1]["record_note"]
+        # play_note1 = midi_cfg["samples"][1]["play_note"]
+        # record_note2 = midi_cfg["samples"][2]["record_note"]
+        # play_note2 = midi_cfg["samples"][2]["play_note"]
 
         period_cc0 = midi_cfg["paula_channels"][0]["period_cc"]
         volume_cc0 = midi_cfg["paula_channels"][0]["volume_cc"]
@@ -258,12 +263,12 @@ class Paula2Top(Elaboratable):
         record_toggle_evts = [Signal() for _ in range(self.NUM_CH)]
         playback_evts = [Signal() for _ in range(self.NUM_CH)]
 
-        record_toggle_evt0 = record_toggle_evts[0]
-        playback_evt0 = playback_evts[0]
-        record_toggle_evt1 = record_toggle_evts[1]
-        playback_evt1 = playback_evts[1]
-        record_toggle_evt2 = record_toggle_evts[2]
-        playback_evt2 = playback_evts[2]
+        # record_toggle_evt0 = record_toggle_evts[0]
+        # playback_evt0 = playback_evts[0]
+        # record_toggle_evt1 = record_toggle_evts[1]
+        # playback_evt1 = playback_evts[1]
+        # record_toggle_evt2 = record_toggle_evts[2]
+        # playback_evt2 = playback_evts[2]
 
         reset_audx_evt = Signal()
         reset_atxxx_evt = Signal()
@@ -294,24 +299,33 @@ class Paula2Top(Elaboratable):
             pmod0.i_cal.valid.eq(1),
             pmod0.codec_mute.eq(0),
             sample_tick.eq(pmod0.o_cal.valid),
-            record_toggle_evt0.eq(
-                midi_proc.o_note_on_valid & (midi_proc.o_note == record_note0)
-            ),
-            playback_evt0.eq(
-                midi_proc.o_note_on_valid & (midi_proc.o_note == play_note0)
-            ),
-            record_toggle_evt1.eq(
-                midi_proc.o_note_on_valid & (midi_proc.o_note == record_note1)
-            ),
-            playback_evt1.eq(
-                midi_proc.o_note_on_valid & (midi_proc.o_note == play_note1)
-            ),
-            record_toggle_evt2.eq(
-                midi_proc.o_note_on_valid & (midi_proc.o_note == record_note2)
-            ),
-            playback_evt2.eq(
-                midi_proc.o_note_on_valid & (midi_proc.o_note == play_note2)
-            ),
+        ]
+
+        for i in range(self.NUM_CH):
+            m.d.comb += [
+                record_toggle_evts[i].eq(
+                    midi_proc.o_note_on_valid & (midi_proc.o_note == record_notes[i])
+                ),
+                playback_evts[i].eq(
+                    midi_proc.o_note_on_valid & (midi_proc.o_note == play_notes[i])
+                ),
+            ]
+
+        #     record_toggle_evt1.eq(
+        #         midi_proc.o_note_on_valid & (midi_proc.o_note == record_note1)
+        #     ),
+        #     playback_evt1.eq(
+        #         midi_proc.o_note_on_valid & (midi_proc.o_note == play_note1)
+        #     ),
+        #     record_toggle_evt2.eq(
+        #         midi_proc.o_note_on_valid & (midi_proc.o_note == record_note2)
+        #     ),
+        #     playback_evt2.eq(
+        #         midi_proc.o_note_on_valid & (midi_proc.o_note == play_note2)
+        #     ),
+        # ]
+
+        m.d.comb += [
             reset_audx_evt.eq(
                 C(0, 1)
                 if reset_audx_note is None
@@ -430,6 +444,7 @@ class Paula2Top(Elaboratable):
             adkcon_bits_to_clear.eq(adkcon_written_bits & ~adkcon_target_bits),
             strhor_pulse.eq(clk7_en_pulse & (strhor_div == 479)),
         ]
+
         toggle_mask_val = 0
         if atvol0_note is not None:
             toggle_mask_val = toggle_mask_val | (

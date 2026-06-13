@@ -30,8 +30,6 @@ class RegisterMapping(object):
         self._lut = Array(Const(v, value_shape) for v in self.lut_values)
 
         self.target = Signal(range(max_val + 1), init=reg_init)
-        # Start "written" at the same value to avoid unnecessary startup rewrites
-        # that can momentarily steal cycles from AUD0DAT feeding.
         self.written = Signal(range(max_val + 1), init=reg_init)
         self.reset_to_init = Signal(init=0)
 
@@ -95,7 +93,6 @@ class RegisterMapping(object):
 
 
 class MidiProcessing(Elaboratable):
-    """TRS MIDI RX + decode with NOTE_ON and CONTROL_CHANGE handling."""
 
     def __init__(
         self,
@@ -131,8 +128,7 @@ class MidiProcessing(Elaboratable):
             if mapping not in unique_mappings:
                 unique_mappings.append(mapping)
 
-        # External reset pulses can force mapped register targets back to
-        # their startup values.
+        # external pulses force mapped register targets back to init values
         for mapping in unique_mappings:
             with m.If(mapping.reset_to_init):
                 m.d.sync += mapping.target.eq(mapping.reg_init)

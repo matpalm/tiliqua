@@ -118,7 +118,8 @@ class Paula2Top(Elaboratable):
         reset_audx_note = reset_cfg.get("AUDx???")
         reset_atxxx_note = reset_cfg.get("AT???x")
 
-        adkcon_audio_set_bits = int(midi_cfg.get("adkcon_audio_set_bits", 0)) & 0xFF
+        # init ADKCON with no modulation
+        adkcon_audio_set_bits = 0
 
         # urgh. this whole midi mapping business has ended up super weird :/
 

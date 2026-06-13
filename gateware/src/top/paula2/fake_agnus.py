@@ -22,20 +22,11 @@ class FakeAgnus(wiring.Component):
     Each AUD0DAT word is packed as two consecutive sample bytes.
     """
 
-    # AUD0LEN = 0x52
-    # AUD0DAT = 0x55
-    # AUD1LEN = 0x5A
-    # AUD1DAT = 0x5D
-    # AUD2LEN = 0x62
-    # AUD2DAT = 0x65
-    # AUD3LEN = 0x6A
-    # AUD3DAT = 0x6D
-
     PHASE_WIDTH = 32
     FRAC_BITS = 16
 
     PHASE_INC_1X = 1 << FRAC_BITS
-    PAULA_CCK_HZ = 60_000_000 // 8
+    PAULA_CCK_HZ = 60_000_000 // 8  # todo: move into shared config between paula top
     DEFAULT_AUDxPER = 320
 
     INPUT_SAMPLE_HZ = 48_000

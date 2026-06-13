@@ -33,13 +33,11 @@ class Paula2Top(Elaboratable):
 
     NUM_CH = 4
 
-    PAULA_CCK_HZ = 60_000_000 // 8
+    PAULA_CCK_HZ = 60_000_000 // 8  # system / clk7+1
     PAULA_MIN_PERIOD = 121  # TODO: tune this more ?
     PAULA_MAX_PERIOD = 0xFFFF
 
     PAULA_BASE_PERIOD = FakeAgnus.DEFAULT_AUDxPER
-    PAULA_MIDI_FAST_PERIOD = PAULA_MIN_PERIOD
-    PAULA_MIDI_SLOW_PERIOD = PAULA_MAX_PERIOD
     PAULA_LENGTH_WORDS = FakeAgnus.CAPTURE_WORDS
     PAULA_DMA_ENABLE_MASK = 0b1111
 
@@ -134,7 +132,7 @@ class Paula2Top(Elaboratable):
             )
             self.register_mappings[f"AUD{i}PER"] = RegisterMapping(
                 enc_range=(0, 127),
-                reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
+                reg_range=(self.PAULA_MAX_PERIOD, self.PAULA_MIN_PERIOD),
                 reg_init=self.PAULA_BASE_PERIOD,
                 mapping="exp",
                 anchor=(64, self.PAULA_BASE_PERIOD),

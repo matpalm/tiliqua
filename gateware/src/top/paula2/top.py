@@ -30,6 +30,8 @@ from paula_audio_wrapper import PaulaAudioWrapper
 
 class Paula2Top(Elaboratable):
 
+    NUM_CH = 3
+
     PAULA_CCK_HZ = 60_000_000 // 8
     PAULA_MIN_PERIOD = 121
     PAULA_MAX_PERIOD = 0xFFFF
@@ -192,18 +194,37 @@ class Paula2Top(Elaboratable):
         wiring.connect(m, pmod0.pins, pmod0_provider.pins)
 
         m.submodules.paudio = paudio = PaulaAudioWrapper()
-        m.submodules.fake_agnus0 = fake_agnus0 = FakeAgnus(
-            aud_dat_addr=FakeAgnus.AUD0DAT,
-            aud_len_addr=FakeAgnus.AUD0LEN,
+
+        fake_agni = []
+        fake_agni.append(
+            FakeAgnus(
+                aud_dat_addr=FakeAgnus.AUD0DAT,
+                aud_len_addr=FakeAgnus.AUD0LEN,
+            )
         )
-        m.submodules.fake_agnus1 = fake_agnus1 = FakeAgnus(
-            aud_dat_addr=FakeAgnus.AUD1DAT,
-            aud_len_addr=FakeAgnus.AUD1LEN,
+        fake_agni.append(
+            FakeAgnus(
+                aud_dat_addr=FakeAgnus.AUD1DAT,
+                aud_len_addr=FakeAgnus.AUD1LEN,
+            )
         )
-        m.submodules.fake_agnus2 = fake_agnus2 = FakeAgnus(
-            aud_dat_addr=FakeAgnus.AUD2DAT,
-            aud_len_addr=FakeAgnus.AUD2LEN,
+        fake_agni.append(
+            FakeAgnus(
+                aud_dat_addr=FakeAgnus.AUD2DAT,
+                aud_len_addr=FakeAgnus.AUD2LEN,
+            )
         )
+        assert len(fake_agni) == self.NUM_CH
+        m.submodules += fake_agni
+
+        fake_agnus0 = fake_agni[0]
+        fake_agnus1 = fake_agni[1]
+        fake_agnus2 = fake_agni[2]
+
+        # m.submodules.fake_agnus2 = fake_agnus2 = FakeAgnus(
+        #     aud_dat_addr=FakeAgnus.AUD2DAT,
+        #     aud_len_addr=FakeAgnus.AUD2LEN,
+        # )
 
         config_state = Signal(unsigned(4), init=0)
         reg_addr = Signal(unsigned(8), init=0)

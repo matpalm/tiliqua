@@ -17,6 +17,10 @@
     {
       "record_note": 46,
       "play_note": 38
+    },
+    {
+      "record_note": 47,
+      "play_note": 39
     }
   ],
   "paula_channels": [
@@ -34,16 +38,25 @@
       "length_cc": 114,
       "period_cc": 18,
       "volume_cc": 19
+    },
+    {
+      "length_cc": 17,
+      "period_cc": 91,
+      "volume_cc": 79
     }
   ],
   "modulation": [
     {
-        "toggle_period_note": 49,
-        "toggle_volume_note": 41
+      "toggle_period_note": 49,
+      "toggle_volume_note": 41
     },
     {
-        "toggle_period_note": 50,
-        "toggle_volume_note": 42
+      "toggle_period_note": 50,
+      "toggle_volume_note": 42
+    },
+    {
+      "toggle_period_note": 51,
+      "toggle_volume_note": 43
     }
   ]
 }

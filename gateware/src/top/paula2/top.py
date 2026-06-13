@@ -30,7 +30,7 @@ from paula_audio_wrapper import PaulaAudioWrapper
 
 class Paula2Top(Elaboratable):
 
-    NUM_CH = 3
+    NUM_CH = 4
 
     PAULA_CCK_HZ = 60_000_000 // 8
     PAULA_MIN_PERIOD = 121  # TODO: tune this more ?
@@ -40,7 +40,7 @@ class Paula2Top(Elaboratable):
     PAULA_MIDI_FAST_PERIOD = PAULA_MIN_PERIOD
     PAULA_MIDI_SLOW_PERIOD = PAULA_MAX_PERIOD
     PAULA_LENGTH_WORDS = FakeAgnus.CAPTURE_WORDS
-    PAULA_DMA_ENABLE_MASK = 0b0111
+    PAULA_DMA_ENABLE_MASK = 0b1111
 
     AUD0LEN = 0x52  # cc10
     AUD0PER = 0x53  # cc74
@@ -182,13 +182,19 @@ class Paula2Top(Elaboratable):
                 aud_dat_addr=self.AUD2DAT,
             )
         )
-        assert len(fake_agni) == self.NUM_CH
+        fake_agni.append(
+            FakeAgnus(
+                aud_len_addr=self.AUD3LEN,
+                aud_dat_addr=self.AUD3DAT,
+            )
+        )
         m.submodules += fake_agni
 
         # TODO: generalise the state machine later for N channels. is working at least :/
         fake_agnus0 = fake_agni[0]
         fake_agnus1 = fake_agni[1]
         fake_agnus2 = fake_agni[2]
+        fake_agnus3 = fake_agni[3]
 
         config_state = Signal(unsigned(4), init=0)
         reg_addr = Signal(unsigned(8), init=0)
@@ -208,8 +214,8 @@ class Paula2Top(Elaboratable):
 
         dma_prime_writes = Signal(range(64), init=0)
 
-        dma_feed_sel = Signal(range(3), init=0)
-        dma_req_pending = Signal(unsigned(3), init=0)
+        dma_feed_sel = Signal(range(self.NUM_CH), init=0)
+        dma_req_pending = Signal(unsigned(self.NUM_CH), init=0)
 
         adkcon_target_bits = Signal(unsigned(8), init=adkcon_audio_set_bits)
         adkcon_written_bits = Signal(unsigned(8), init=0)
@@ -359,6 +365,8 @@ class Paula2Top(Elaboratable):
         atper0_note = midi_cfg["modulation"][0]["toggle_period_note"]
         atvol1_note = midi_cfg["modulation"][1]["toggle_volume_note"]
         atper1_note = midi_cfg["modulation"][1]["toggle_period_note"]
+        atvol2_note = midi_cfg["modulation"][2]["toggle_volume_note"]
+        atper2_note = midi_cfg["modulation"][2]["toggle_period_note"]
 
         toggle_mask_val = 0
         toggle_mask_val = toggle_mask_val | (
@@ -386,6 +394,20 @@ class Paula2Top(Elaboratable):
             Mux(
                 midi_proc.o_note_on_valid & (midi_proc.o_note == int(atper1_note)),
                 C(0x20, 8),
+                C(0x00, 8),
+            )
+        )
+        toggle_mask_val = toggle_mask_val | (
+            Mux(
+                midi_proc.o_note_on_valid & (midi_proc.o_note == int(atvol2_note)),
+                C(0x04, 8),
+                C(0x00, 8),
+            )
+        )
+        toggle_mask_val = toggle_mask_val | (
+            Mux(
+                midi_proc.o_note_on_valid & (midi_proc.o_note == int(atper2_note)),
+                C(0x40, 8),
                 C(0x00, 8),
             )
         )
@@ -429,7 +451,9 @@ class Paula2Top(Elaboratable):
             with m.If(strhor_pulse):
                 m.d.sync += dma_req_pending.eq(
                     dma_req_pending
-                    | Cat(paudio.dmal[0], paudio.dmal[1], paudio.dmal[2])
+                    | Cat(
+                        paudio.dmal[0], paudio.dmal[1], paudio.dmal[2], paudio.dmal[3]
+                    )
                 )
 
         with m.If(clk7_en_pulse):
@@ -523,20 +547,47 @@ class Paula2Top(Elaboratable):
                             reg_data.eq(self.PAULA_LENGTH_WORDS),
                             reg_write.eq(1),
                             config_state.eq(11),
-                            dma_prime_writes.eq(18),
-                            dma_feed_sel.eq(0),
                             write_hold.eq(1),
                         ]
                     with m.Case(11):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD3PER),
+                            reg_data.eq(self.PAULA_BASE_PERIOD),
+                            reg_write.eq(1),
+                            config_state.eq(12),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(12):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD3VOL),
+                            reg_data.eq(64),
+                            reg_write.eq(1),
+                            config_state.eq(13),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(13):
+                        m.d.sync += [
+                            reg_addr.eq(self.AUD3LEN),
+                            reg_data.eq(self.PAULA_LENGTH_WORDS),
+                            reg_write.eq(1),
+                            config_state.eq(14),
+                            dma_prime_writes.eq(24),
+                            dma_feed_sel.eq(0),
+                            write_hold.eq(1),
+                        ]
+                    with m.Case(14):
                         aud0per = self.register_mappings["AUD0PER"]
                         aud1per = self.register_mappings["AUD1PER"]
                         aud2per = self.register_mappings["AUD2PER"]
+                        aud3per = self.register_mappings["AUD3PER"]
                         aud0vol = self.register_mappings["AUD0VOL"]
                         aud1vol = self.register_mappings["AUD1VOL"]
                         aud2vol = self.register_mappings["AUD2VOL"]
+                        aud3vol = self.register_mappings["AUD3VOL"]
                         aud0len = self.register_mappings["AUD0LEN"]
                         aud1len = self.register_mappings["AUD1LEN"]
                         aud2len = self.register_mappings["AUD2LEN"]
+                        aud3len = self.register_mappings["AUD3LEN"]
 
                         with m.If(adkcon_bits_to_set != 0):
                             m.d.sync += [
@@ -582,6 +633,14 @@ class Paula2Top(Elaboratable):
                                 aud2per.written.eq(aud2per.target),
                                 write_hold.eq(1),
                             ]
+                        with m.Elif(aud3per.target != aud3per.written):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD3PER),
+                                reg_data.eq(aud3per.target),
+                                reg_write.eq(1),
+                                aud3per.written.eq(aud3per.target),
+                                write_hold.eq(1),
+                            ]
                         with m.Elif(aud0vol.target != aud0vol.written):
                             m.d.sync += [
                                 reg_addr.eq(self.AUD0VOL),
@@ -604,6 +663,14 @@ class Paula2Top(Elaboratable):
                                 reg_data.eq(aud2vol.target),
                                 reg_write.eq(1),
                                 aud2vol.written.eq(aud2vol.target),
+                                write_hold.eq(1),
+                            ]
+                        with m.Elif(aud3vol.target != aud3vol.written):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD3VOL),
+                                reg_data.eq(aud3vol.target),
+                                reg_write.eq(1),
+                                aud3vol.written.eq(aud3vol.target),
                                 write_hold.eq(1),
                             ]
                         with m.Elif(aud0len.target != aud0len.written):
@@ -630,6 +697,14 @@ class Paula2Top(Elaboratable):
                                 aud2len.written.eq(aud2len.target),
                                 write_hold.eq(1),
                             ]
+                        with m.Elif(aud3len.target != aud3len.written):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD3LEN),
+                                reg_data.eq(aud3len.target),
+                                reg_write.eq(1),
+                                aud3len.written.eq(aud3len.target),
+                                write_hold.eq(1),
+                            ]
                         with m.Elif(dma_prime_writes != 0):
                             with m.If(dma_feed_sel == 0):
                                 m.d.sync += [
@@ -649,10 +724,19 @@ class Paula2Top(Elaboratable):
                                     dma_feed_sel.eq(2),
                                     write_hold.eq(1),
                                 ]
-                            with m.Else():
+                            with m.Elif(dma_feed_sel == 2):
                                 m.d.sync += [
                                     reg_addr.eq(self.AUD2DAT),
                                     reg_data.eq(fake_agnus2.o_audio_data0),
+                                    reg_write.eq(1),
+                                    dma_prime_writes.eq(dma_prime_writes - 1),
+                                    dma_feed_sel.eq(3),
+                                    write_hold.eq(1),
+                                ]
+                            with m.Else():
+                                m.d.sync += [
+                                    reg_addr.eq(self.AUD3DAT),
+                                    reg_data.eq(fake_agnus3.o_audio_data0),
                                     reg_write.eq(1),
                                     dma_prime_writes.eq(dma_prime_writes - 1),
                                     dma_feed_sel.eq(0),
@@ -685,6 +769,15 @@ class Paula2Top(Elaboratable):
                                             reg_data.eq(fake_agnus2.o_audio_data0),
                                             reg_write.eq(1),
                                             dma_req_pending[2].eq(0),
+                                            dma_feed_sel.eq(3),
+                                            write_hold.eq(1),
+                                        ]
+                                    with m.Elif(dma_req_pending[3] == 1):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD3DAT),
+                                            reg_data.eq(fake_agnus3.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dma_req_pending[3].eq(0),
                                             dma_feed_sel.eq(0),
                                             write_hold.eq(1),
                                         ]
@@ -704,6 +797,15 @@ class Paula2Top(Elaboratable):
                                             reg_data.eq(fake_agnus2.o_audio_data0),
                                             reg_write.eq(1),
                                             dma_req_pending[2].eq(0),
+                                            dma_feed_sel.eq(3),
+                                            write_hold.eq(1),
+                                        ]
+                                    with m.Elif(dma_req_pending[3] == 1):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD3DAT),
+                                            reg_data.eq(fake_agnus3.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dma_req_pending[3].eq(0),
                                             dma_feed_sel.eq(0),
                                             write_hold.eq(1),
                                         ]
@@ -716,13 +818,22 @@ class Paula2Top(Elaboratable):
                                             dma_feed_sel.eq(1),
                                             write_hold.eq(1),
                                         ]
-                                with m.Default():
+                                with m.Case(2):
                                     with m.If(dma_req_pending[2] == 1):
                                         m.d.sync += [
                                             reg_addr.eq(self.AUD2DAT),
                                             reg_data.eq(fake_agnus2.o_audio_data0),
                                             reg_write.eq(1),
                                             dma_req_pending[2].eq(0),
+                                            dma_feed_sel.eq(3),
+                                            write_hold.eq(1),
+                                        ]
+                                    with m.Elif(dma_req_pending[3] == 1):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD3DAT),
+                                            reg_data.eq(fake_agnus3.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dma_req_pending[3].eq(0),
                                             dma_feed_sel.eq(0),
                                             write_hold.eq(1),
                                         ]
@@ -742,6 +853,43 @@ class Paula2Top(Elaboratable):
                                             reg_write.eq(1),
                                             dma_req_pending[1].eq(0),
                                             dma_feed_sel.eq(2),
+                                            write_hold.eq(1),
+                                        ]
+                                with m.Default():
+                                    with m.If(dma_req_pending[3] == 1):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD3DAT),
+                                            reg_data.eq(fake_agnus3.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dma_req_pending[3].eq(0),
+                                            dma_feed_sel.eq(0),
+                                            write_hold.eq(1),
+                                        ]
+                                    with m.Elif(dma_req_pending[0] == 1):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD0DAT),
+                                            reg_data.eq(fake_agnus0.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dma_req_pending[0].eq(0),
+                                            dma_feed_sel.eq(1),
+                                            write_hold.eq(1),
+                                        ]
+                                    with m.Elif(dma_req_pending[1] == 1):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD1DAT),
+                                            reg_data.eq(fake_agnus1.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dma_req_pending[1].eq(0),
+                                            dma_feed_sel.eq(2),
+                                            write_hold.eq(1),
+                                        ]
+                                    with m.Elif(dma_req_pending[2] == 1):
+                                        m.d.sync += [
+                                            reg_addr.eq(self.AUD2DAT),
+                                            reg_data.eq(fake_agnus2.o_audio_data0),
+                                            reg_write.eq(1),
+                                            dma_req_pending[2].eq(0),
+                                            dma_feed_sel.eq(3),
                                             write_hold.eq(1),
                                         ]
 

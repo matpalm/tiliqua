@@ -105,15 +105,15 @@ class Paula2Top(Elaboratable):
         # record_note2 = midi_cfg["samples"][2]["record_note"]
         # play_note2 = midi_cfg["samples"][2]["play_note"]
 
-        length_cc0 = midi_cfg["paula_channels"][0]["length_cc"]
-        period_cc0 = midi_cfg["paula_channels"][0]["period_cc"]
-        volume_cc0 = midi_cfg["paula_channels"][0]["volume_cc"]
-        length_cc1 = midi_cfg["paula_channels"][1]["length_cc"]
-        period_cc1 = midi_cfg["paula_channels"][1]["period_cc"]
-        volume_cc1 = midi_cfg["paula_channels"][1]["volume_cc"]
-        length_cc2 = midi_cfg["paula_channels"][2]["length_cc"]
-        period_cc2 = midi_cfg["paula_channels"][2]["period_cc"]
-        volume_cc2 = midi_cfg["paula_channels"][2]["volume_cc"]
+        # length_cc0 = midi_cfg["paula_channels"][0]["length_cc"]
+        # period_cc0 = midi_cfg["paula_channels"][0]["period_cc"]
+        # volume_cc0 = midi_cfg["paula_channels"][0]["volume_cc"]
+        # length_cc1 = midi_cfg["paula_channels"][1]["length_cc"]
+        # period_cc1 = midi_cfg["paula_channels"][1]["period_cc"]
+        # volume_cc1 = midi_cfg["paula_channels"][1]["volume_cc"]
+        # length_cc2 = midi_cfg["paula_channels"][2]["length_cc"]
+        # period_cc2 = midi_cfg["paula_channels"][2]["period_cc"]
+        # volume_cc2 = midi_cfg["paula_channels"][2]["volume_cc"]
 
         atvol0_note = midi_cfg["modulation"][0]["toggle_volume_note"]
         atper0_note = midi_cfg["modulation"][0]["toggle_period_note"]
@@ -174,17 +174,24 @@ class Paula2Top(Elaboratable):
             ),
         }
 
-        cc_mapping = {
-            length_cc0: self.register_mappings["AUD0LEN"],
-            period_cc0: self.register_mappings["AUD0PER"],
-            volume_cc0: self.register_mappings["AUD0VOL"],
-            length_cc1: self.register_mappings["AUD1LEN"],
-            period_cc1: self.register_mappings["AUD1PER"],
-            volume_cc1: self.register_mappings["AUD1VOL"],
-            length_cc2: self.register_mappings["AUD2LEN"],
-            period_cc2: self.register_mappings["AUD2PER"],
-            volume_cc2: self.register_mappings["AUD2VOL"],
-        }
+        cc_mapping = {}  # o_O urgh
+        for i in range(self.NUM_CH):
+            cc = midi_cfg["paula_channels"][i]["length_cc"]
+            cc_mapping[cc] = self.register_mappings[f"AUD{i}LEN"]
+            cc = midi_cfg["paula_channels"][i]["period_cc"]
+            cc_mapping[cc] = self.register_mappings[f"AUD{i}PER"]
+            cc = midi_cfg["paula_channels"][i]["volume_cc"]
+            cc_mapping[cc] = self.register_mappings[f"AUD{i}VOL"]
+        #     length_cc0: self.register_mappings["AUD0LEN"],
+        #     period_cc0: self.register_mappings["AUD0PER"],
+        #     volume_cc0: self.register_mappings["AUD0VOL"],
+        #     length_cc1: self.register_mappings["AUD1LEN"],
+        #     period_cc1: self.register_mappings["AUD1PER"],
+        #     volume_cc1: self.register_mappings["AUD1VOL"],
+        #     length_cc2: self.register_mappings["AUD2LEN"],
+        #     period_cc2: self.register_mappings["AUD2PER"],
+        #     volume_cc2: self.register_mappings["AUD2VOL"],
+        # }
 
         m.submodules.midi_proc = midi_proc = MidiProcessing(
             midi_channel=int(midi_cfg["midi_channel"]),

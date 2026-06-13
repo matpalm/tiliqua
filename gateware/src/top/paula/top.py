@@ -1,11 +1,13 @@
-"""Paula standalone with MIDI-controlled record/playback on channels 0 -> 3"""
+"""Paula standalone with MIDI-controlled record/playback on channels 0 -> 3
+
+see matpalm.com/blog/paula_tiliqua for more info
+"""
 
 import json
 from pathlib import Path
 
 from amaranth import *
 from amaranth.lib import wiring
-
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ

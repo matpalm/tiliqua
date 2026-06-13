@@ -99,10 +99,13 @@ class Paula2Top(Elaboratable):
 
         period_cc0 = midi_cfg["paula_channels"][0]["period_cc"]
         volume_cc0 = midi_cfg["paula_channels"][0]["volume_cc"]
+        length_cc0 = midi_cfg["paula_channels"][0]["length_cc"]
         period_cc1 = midi_cfg["paula_channels"][1]["period_cc"]
         volume_cc1 = midi_cfg["paula_channels"][1]["volume_cc"]
+        length_cc1 = midi_cfg["paula_channels"][1]["length_cc"]
         period_cc2 = midi_cfg["paula_channels"][2]["period_cc"]
         volume_cc2 = midi_cfg["paula_channels"][2]["volume_cc"]
+        length_cc2 = midi_cfg["paula_channels"][2]["length_cc"]
 
         atvol0_note = midi_cfg["modulation"][0]["toggle_volume_note"]
         atper0_note = midi_cfg["modulation"][0]["toggle_period_note"]
@@ -146,15 +149,33 @@ class Paula2Top(Elaboratable):
             "AUD2VOL": RegisterMapping(
                 enc_range=(0, 127), reg_range=(0, 64), reg_init=64
             ),
+            "AUD0LEN": RegisterMapping(
+                enc_range=(0, 127),
+                reg_range=(1, self.PAULA_LENGTH_WORDS),
+                reg_init=self.PAULA_LENGTH_WORDS,
+            ),
+            "AUD1LEN": RegisterMapping(
+                enc_range=(0, 127),
+                reg_range=(1, self.PAULA_LENGTH_WORDS),
+                reg_init=self.PAULA_LENGTH_WORDS,
+            ),
+            "AUD2LEN": RegisterMapping(
+                enc_range=(0, 127),
+                reg_range=(1, self.PAULA_LENGTH_WORDS),
+                reg_init=self.PAULA_LENGTH_WORDS,
+            ),
         }
 
         cc_mapping = {
             period_cc0: self.register_mappings["AUD0PER"],
             volume_cc0: self.register_mappings["AUD0VOL"],
+            length_cc0: self.register_mappings["AUD0LEN"],
             period_cc1: self.register_mappings["AUD1PER"],
             volume_cc1: self.register_mappings["AUD1VOL"],
+            length_cc1: self.register_mappings["AUD1LEN"],
             period_cc2: self.register_mappings["AUD2PER"],
             volume_cc2: self.register_mappings["AUD2VOL"],
+            length_cc2: self.register_mappings["AUD2LEN"],
         }
 
         m.submodules.midi_proc = midi_proc = MidiProcessing(
@@ -171,13 +192,16 @@ class Paula2Top(Elaboratable):
 
         m.submodules.paudio = paudio = PaulaAudioWrapper()
         m.submodules.fake_agnus0 = fake_agnus0 = FakeAgnus(
-            aud_dat_addr=FakeAgnus.AUD0DAT
+            aud_dat_addr=FakeAgnus.AUD0DAT,
+            aud_len_addr=FakeAgnus.AUD0LEN,
         )
         m.submodules.fake_agnus1 = fake_agnus1 = FakeAgnus(
-            aud_dat_addr=FakeAgnus.AUD1DAT
+            aud_dat_addr=FakeAgnus.AUD1DAT,
+            aud_len_addr=FakeAgnus.AUD1LEN,
         )
         m.submodules.fake_agnus2 = fake_agnus2 = FakeAgnus(
-            aud_dat_addr=FakeAgnus.AUD2DAT
+            aud_dat_addr=FakeAgnus.AUD2DAT,
+            aud_len_addr=FakeAgnus.AUD2LEN,
         )
 
         config_state = Signal(unsigned(4), init=0)
@@ -279,6 +303,9 @@ class Paula2Top(Elaboratable):
             self.register_mappings["AUD0VOL"].reset_to_init.eq(reset_audx_evt),
             self.register_mappings["AUD1VOL"].reset_to_init.eq(reset_audx_evt),
             self.register_mappings["AUD2VOL"].reset_to_init.eq(reset_audx_evt),
+            self.register_mappings["AUD0LEN"].reset_to_init.eq(reset_audx_evt),
+            self.register_mappings["AUD1LEN"].reset_to_init.eq(reset_audx_evt),
+            self.register_mappings["AUD2LEN"].reset_to_init.eq(reset_audx_evt),
             raw_in0.eq(pmod0.o_cal.payload[0].as_value()),
             raw_in1.eq(pmod0.o_cal.payload[1].as_value()),
             raw_in2.eq(pmod0.o_cal.payload[2].as_value()),
@@ -543,6 +570,9 @@ class Paula2Top(Elaboratable):
                         aud0vol = self.register_mappings["AUD0VOL"]
                         aud1vol = self.register_mappings["AUD1VOL"]
                         aud2vol = self.register_mappings["AUD2VOL"]
+                        aud0len = self.register_mappings["AUD0LEN"]
+                        aud1len = self.register_mappings["AUD1LEN"]
+                        aud2len = self.register_mappings["AUD2LEN"]
 
                         with m.If(adkcon_bits_to_set != 0):
                             m.d.sync += [
@@ -610,6 +640,30 @@ class Paula2Top(Elaboratable):
                                 reg_data.eq(aud2vol.target),
                                 reg_write.eq(1),
                                 aud2vol.written.eq(aud2vol.target),
+                                write_hold.eq(1),
+                            ]
+                        with m.Elif(aud0len.target != aud0len.written):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD0LEN),
+                                reg_data.eq(aud0len.target),
+                                reg_write.eq(1),
+                                aud0len.written.eq(aud0len.target),
+                                write_hold.eq(1),
+                            ]
+                        with m.Elif(aud1len.target != aud1len.written):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD1LEN),
+                                reg_data.eq(aud1len.target),
+                                reg_write.eq(1),
+                                aud1len.written.eq(aud1len.target),
+                                write_hold.eq(1),
+                            ]
+                        with m.Elif(aud2len.target != aud2len.written):
+                            m.d.sync += [
+                                reg_addr.eq(self.AUD2LEN),
+                                reg_data.eq(aud2len.target),
+                                reg_write.eq(1),
+                                aud2len.written.eq(aud2len.target),
                                 write_hold.eq(1),
                             ]
                         with m.Elif(dma_prime_writes != 0):

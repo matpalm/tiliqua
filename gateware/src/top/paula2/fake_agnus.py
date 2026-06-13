@@ -18,11 +18,15 @@ class FakeAgnus(wiring.Component):
     - `record_note` while playing back stops playback and arms recording.
 
     Playback rate modulation is driven by AUD0PER programming in top.py.
+    Playback loop length can be limited by AUDxLEN writes.
     Each AUD0DAT word is packed as two consecutive sample bytes.
     """
 
+    AUD0LEN = 0x52
     AUD0DAT = 0x55
+    AUD1LEN = 0x5A
     AUD1DAT = 0x5D
+    AUD2LEN = 0x62
     AUD2DAT = 0x65
 
     PHASE_WIDTH = 32
@@ -66,8 +70,11 @@ class FakeAgnus(wiring.Component):
     o_capture_done: Out(1)
     o_phase_inc: Out(unsigned(PHASE_WIDTH))
 
-    def __init__(self, aud_dat_addr: int = AUD0DAT):
+    def __init__(self, aud_dat_addr: int = AUD0DAT, aud_len_addr: int | None = None):
         self.aud_dat_addr = int(aud_dat_addr)
+        self.aud_len_addr = int(
+            aud_dat_addr - 3 if aud_len_addr is None else aud_len_addr
+        )
         super().__init__()
 
     def elaborate(self, platform):
@@ -101,15 +108,21 @@ class FakeAgnus(wiring.Component):
         phase_inc = Signal(unsigned(self.PHASE_WIDTH))
         phase_next = Signal(unsigned(self.PHASE_WIDTH))
         phase_wrap = Signal(unsigned(self.PHASE_WIDTH))
+        effective_words = Signal(range(self.CAPTURE_WORDS + 1))
+        programmed_len_words = Signal(
+            range(self.CAPTURE_WORDS + 1), init=self.CAPTURE_WORDS
+        )
         mem_limit_words = Signal(range(self.CAPTURE_WORDS + 1))
         mem_limit_phase = Signal(unsigned(self.PHASE_WIDTH))
 
         dat_write = Signal()
+        len_write = Signal()
         dat_write_prev = Signal(init=0)
         dat_write_edge = Signal()
 
         m.d.comb += [
             dat_write.eq(self.i_reg_write & (self.i_reg_addr == self.aud_dat_addr)),
+            len_write.eq(self.i_reg_write & (self.i_reg_addr == self.aud_len_addr)),
             dat_write_edge.eq(dat_write & ~dat_write_prev),
             in_sample_s8.eq(self.i_sample_in.as_signed()),
             in_pos_zero_cross.eq(
@@ -131,11 +144,18 @@ class FakeAgnus(wiring.Component):
             ),
             self.o_capture_done.eq(~recording),
             self.o_phase_inc.eq(phase_inc),
+            effective_words.eq(
+                Mux(
+                    valid_words > programmed_len_words,
+                    programmed_len_words,
+                    valid_words,
+                )
+            ),
             mem_limit_words.eq(
                 Mux(
-                    valid_words == 0,
+                    effective_words == 0,
                     C(1, mem_limit_words.shape().width),
-                    valid_words,
+                    effective_words,
                 )
             ),
             mem_limit_phase.eq(mem_limit_words << self.FRAC_BITS),
@@ -160,10 +180,26 @@ class FakeAgnus(wiring.Component):
                 capture_half.eq(0),
                 capture_first.eq(0),
                 capture_acc.eq(0),
+                programmed_len_words.eq(self.CAPTURE_WORDS),
                 play_word_addr.eq(0),
                 phase.eq(0),
             ]
         with m.Else():
+            with m.If(len_write):
+                with m.If(self.i_reg_data <= 1):
+                    m.d.sync += programmed_len_words.eq(1)
+                with m.Elif(self.i_reg_data >= self.CAPTURE_WORDS):
+                    m.d.sync += programmed_len_words.eq(self.CAPTURE_WORDS)
+                with m.Else():
+                    m.d.sync += programmed_len_words.eq(self.i_reg_data)
+
+                # Apply new loop length immediately while playing.
+                with m.If(playback_enabled):
+                    m.d.sync += [
+                        play_word_addr.eq(0),
+                        phase.eq(0),
+                    ]
+
             with m.If(self.i_record_toggle_evt):
                 with m.If(recording):
                     # Toggle stop while recording; apply at next + zero crossing.

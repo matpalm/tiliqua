@@ -21,14 +21,17 @@
   ],
   "paula_channels": [
     {
+      "length_cc": 10,
       "period_cc": 74,
       "volume_cc": 71
     },
     {
+      "length_cc": 77,
       "period_cc": 93,
       "volume_cc": 73
     },
     {
+      "length_cc": 114,
       "period_cc": 18,
       "volume_cc": 19
     }

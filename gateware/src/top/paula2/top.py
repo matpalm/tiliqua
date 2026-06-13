@@ -254,23 +254,32 @@ class Paula2Top(Elaboratable):
         adkcon_toggle_mask = Signal(unsigned(8))
 
         sample_tick = Signal()
-        record_toggle_evt0 = Signal()
-        playback_evt0 = Signal()
-        record_toggle_evt1 = Signal()
-        playback_evt1 = Signal()
-        record_toggle_evt2 = Signal()
-        playback_evt2 = Signal()
+
+        record_toggle_evts = [Signal() for _ in range(self.NUM_CH)]
+        playback_evts = [Signal() for _ in range(self.NUM_CH)]
+
+        record_toggle_evt0 = record_toggle_evts[0]
+        playback_evt0 = playback_evts[0]
+        record_toggle_evt1 = record_toggle_evts[1]
+        playback_evt1 = playback_evts[1]
+        record_toggle_evt2 = record_toggle_evts[2]
+        playback_evt2 = playback_evts[2]
+
         reset_audx_evt = Signal()
         reset_atxxx_evt = Signal()
 
         sample_width = ASQ.as_shape().width
         in_shift = max(sample_width - 8, 0)
-        raw_in0 = Signal(signed(sample_width))
-        raw_in1 = Signal(signed(sample_width))
-        raw_in2 = Signal(signed(sample_width))
-        in0_s8 = Signal(signed(8))
-        in1_s8 = Signal(signed(8))
-        in2_s8 = Signal(signed(8))
+
+        raw_ins = [Signal(signed(sample_width)) for _ in range(self.NUM_CH)]
+        raw_in0 = raw_ins[0]
+        raw_in1 = raw_ins[1]
+        raw_in2 = raw_ins[2]
+
+        inN_s8 = [Signal(signed(8)) for _ in range(self.NUM_CH)]
+        in0_s8 = inN_s8[0]
+        in1_s8 = inN_s8[1]
+        in2_s8 = inN_s8[2]
 
         pa_l = Signal(signed(15))
         pa_r = Signal(signed(15))
@@ -379,6 +388,9 @@ class Paula2Top(Elaboratable):
                 )
             ),
             paudio.audpen.eq(0),
+        ]
+
+        m.d.comb += [
             fake_agnus0.i_reset.eq(reset_ctr != 0),
             fake_agnus0.i_audio_dmal.eq(paudio.dmal[0]),
             fake_agnus0.i_audio_dmas.eq(paudio.dmas[0]),
@@ -409,11 +421,13 @@ class Paula2Top(Elaboratable):
             fake_agnus2.i_reg_write.eq(reg_write),
             fake_agnus2.i_reg_addr.eq(reg_addr),
             fake_agnus2.i_reg_data.eq(reg_data),
+        ]
+
+        m.d.comb += [
             adkcon_bits_to_set.eq(adkcon_target_bits & ~adkcon_written_bits),
             adkcon_bits_to_clear.eq(adkcon_written_bits & ~adkcon_target_bits),
             strhor_pulse.eq(clk7_en_pulse & (strhor_div == 479)),
         ]
-
         toggle_mask_val = 0
         if atvol0_note is not None:
             toggle_mask_val = toggle_mask_val | (

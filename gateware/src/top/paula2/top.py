@@ -362,16 +362,19 @@ class Paula2Top(Elaboratable):
                     & (midi_proc.o_note == int(reset_atxxx_note))
                 )
             ),
-            self.register_mappings["AUD0PER"].reset_to_init.eq(reset_audx_evt),
-            self.register_mappings["AUD1PER"].reset_to_init.eq(reset_audx_evt),
-            self.register_mappings["AUD2PER"].reset_to_init.eq(reset_audx_evt),
-            self.register_mappings["AUD0VOL"].reset_to_init.eq(reset_audx_evt),
-            self.register_mappings["AUD1VOL"].reset_to_init.eq(reset_audx_evt),
-            self.register_mappings["AUD2VOL"].reset_to_init.eq(reset_audx_evt),
-            self.register_mappings["AUD0LEN"].reset_to_init.eq(reset_audx_evt),
-            self.register_mappings["AUD1LEN"].reset_to_init.eq(reset_audx_evt),
-            self.register_mappings["AUD2LEN"].reset_to_init.eq(reset_audx_evt),
         ]
+
+        for reg in self.register_mappings.keys():
+            m.d.comb += self.register_mappings[reg].reset_to_init.eq(reset_audx_evt)
+        #     self.register_mappings["AUD1PER"].reset_to_init.eq(reset_audx_evt),
+        #     self.register_mappings["AUD2PER"].reset_to_init.eq(reset_audx_evt),
+        #     self.register_mappings["AUD0VOL"].reset_to_init.eq(reset_audx_evt),
+        #     self.register_mappings["AUD1VOL"].reset_to_init.eq(reset_audx_evt),
+        #     self.register_mappings["AUD2VOL"].reset_to_init.eq(reset_audx_evt),
+        #     self.register_mappings["AUD0LEN"].reset_to_init.eq(reset_audx_evt),
+        #     self.register_mappings["AUD1LEN"].reset_to_init.eq(reset_audx_evt),
+        #     self.register_mappings["AUD2LEN"].reset_to_init.eq(reset_audx_evt),
+        # ]
 
         for i in range(self.NUM_CH):
             m.d.comb += [

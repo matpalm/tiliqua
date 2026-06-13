@@ -106,6 +106,9 @@ class MidiProcessing(Elaboratable):
 
         self.o_note_on_valid = Signal()
         self.o_note = Signal(unsigned(8))
+        self.o_cc_valid = Signal()
+        self.o_cc_num = Signal(unsigned(8))
+        self.o_cc_value = Signal(unsigned(8))
 
     def elaborate(self, platform):
         m = Module()
@@ -121,6 +124,9 @@ class MidiProcessing(Elaboratable):
             midi_decode.o.ready.eq(1),
             self.o_note_on_valid.eq(0),
             self.o_note.eq(0),
+            self.o_cc_valid.eq(0),
+            self.o_cc_num.eq(0),
+            self.o_cc_value.eq(0),
         ]
 
         unique_mappings = []
@@ -148,6 +154,11 @@ class MidiProcessing(Elaboratable):
                 (msg.status.kind == tiliqua_midi.Status.Kind.CONTROL_CHANGE)
                 & (msg.status.nibble.channel == self.midi_channel)
             ):
+                m.d.comb += [
+                    self.o_cc_valid.eq(1),
+                    self.o_cc_num.eq(msg.midi_payload.control_change.controller_number),
+                    self.o_cc_value.eq(msg.midi_payload.control_change.data),
+                ]
                 with m.Switch(msg.midi_payload.control_change.controller_number):
                     for cc_number, mapping in self.cc_mapping.items():
                         with m.Case(int(cc_number)):

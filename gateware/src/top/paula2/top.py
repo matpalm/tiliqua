@@ -24,6 +24,7 @@ from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
 
 from fake_agnus import FakeAgnus
+from led_low_pass import LedLowPass
 from midi import MidiProcessing, RegisterMapping
 from paula_audio_wrapper import PaulaAudioWrapper
 
@@ -117,6 +118,7 @@ class Paula2Top(Elaboratable):
         reset_cfg = midi_cfg.get("reset", {})
         reset_audx_note = reset_cfg.get("AUDx???")
         reset_atxxx_note = reset_cfg.get("AT???x")
+        toggle_filter_cc = midi_cfg.get("toggle_filter_cc")
 
         # init ADKCON with no modulation
         adkcon_audio_set_bits = 0
@@ -163,6 +165,8 @@ class Paula2Top(Elaboratable):
         wiring.connect(m, pmod0.pins, pmod0_provider.pins)
 
         m.submodules.paudio = paudio = PaulaAudioWrapper()
+        m.submodules.led_lp_l = led_lp_l = LedLowPass()
+        m.submodules.led_lp_r = led_lp_r = LedLowPass()
 
         fake_agni = []
         fake_agni.append(
@@ -231,6 +235,9 @@ class Paula2Top(Elaboratable):
 
         reset_audx_evt = Signal()
         reset_atxxx_evt = Signal()
+        filter_enabled = Signal(init=1)
+        filter_toggle_press_evt = Signal()
+        filter_cc_pressed = Signal(init=0)
 
         sample_width = ASQ.as_shape().width
         in_shift = max(sample_width - 8, 0)
@@ -246,6 +253,8 @@ class Paula2Top(Elaboratable):
         pa_l_boost = Signal(signed(15))
         pa_r_boost = Signal(signed(15))
         out_shift = max(ASQ.as_shape().width - 15, 0)
+        pa_l_out_raw = Signal(signed(ASQ.as_shape().width))
+        pa_r_out_raw = Signal(signed(ASQ.as_shape().width))
 
         m.d.comb += [
             pmod0.o_cal.ready.eq(1),
@@ -279,6 +288,16 @@ class Paula2Top(Elaboratable):
                 else (
                     midi_proc.o_note_on_valid
                     & (midi_proc.o_note == int(reset_atxxx_note))
+                )
+            ),
+            filter_toggle_press_evt.eq(
+                C(0, 1)
+                if toggle_filter_cc is None
+                else (
+                    midi_proc.o_cc_valid
+                    & (midi_proc.o_cc_num == int(toggle_filter_cc))
+                    & (midi_proc.o_cc_value >= 64)
+                    & (~filter_cc_pressed)
                 )
             ),
         ]
@@ -320,8 +339,14 @@ class Paula2Top(Elaboratable):
                 )
             ),
             pa_rst.eq(reset_ctr != 0),
-            pmod0.i_cal.payload[0].as_value().eq(pa_l_boost << out_shift),
-            pmod0.i_cal.payload[1].as_value().eq(pa_r_boost << out_shift),
+            pa_l_out_raw.eq(pa_l_boost << out_shift),
+            pa_r_out_raw.eq(pa_r_boost << out_shift),
+            pmod0.i_cal.payload[0]
+            .as_value()
+            .eq(Mux(filter_enabled, led_lp_l.o_sample, pa_l_out_raw)),
+            pmod0.i_cal.payload[1]
+            .as_value()
+            .eq(Mux(filter_enabled, led_lp_r.o_sample, pa_r_out_raw)),
             pmod0.i_cal.payload[2].as_value().eq(0),
             pmod0.i_cal.payload[3].as_value().eq(0),
             paudio.clk7_en.eq(clk7_en_pulse),
@@ -338,6 +363,13 @@ class Paula2Top(Elaboratable):
                 )
             ),
             paudio.audpen.eq(0),
+        ]
+
+        m.d.comb += [
+            led_lp_l.tick.eq(sample_tick),
+            led_lp_l.i_sample.eq(pa_l_out_raw),
+            led_lp_r.tick.eq(sample_tick),
+            led_lp_r.i_sample.eq(pa_r_out_raw),
         ]
 
         for i in range(self.NUM_CH):
@@ -447,6 +479,19 @@ class Paula2Top(Elaboratable):
             m.d.sync += adkcon_target_bits.eq(0)
         with m.Elif(adkcon_toggle_mask != 0):
             m.d.sync += adkcon_target_bits.eq(adkcon_target_bits ^ adkcon_toggle_mask)
+
+        with m.If(pa_rst):
+            m.d.sync += filter_cc_pressed.eq(0)
+        if toggle_filter_cc is not None:
+            with m.Elif(
+                midi_proc.o_cc_valid & (midi_proc.o_cc_num == int(toggle_filter_cc))
+            ):
+                m.d.sync += filter_cc_pressed.eq(midi_proc.o_cc_value >= 64)
+
+        with m.If(pa_rst):
+            m.d.sync += filter_enabled.eq(1)
+        with m.Elif(filter_toggle_press_evt):
+            m.d.sync += filter_enabled.eq(~filter_enabled)
 
         with m.If(clk7_en_pulse & ~pa_rst):
             with m.If(strhor_pulse):

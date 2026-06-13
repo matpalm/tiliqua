@@ -29,10 +29,14 @@
       "volume_cc": 19
     }
   ],
-  "modulation": {
-    "toggle_atper0_note": 49,
-    "toggle_atvol0_note": 41,
-    "toggle_atper1_note": 50,
-    "toggle_atvol1_note": 42
-  }
+  "modulation": [
+    {
+        "toggle_period_note": 49,
+        "toggle_volume_note": 41
+    },
+    {
+        "toggle_period_note": 50,
+        "toggle_volume_note": 42
+    }
+  ]
 }

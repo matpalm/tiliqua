@@ -67,11 +67,11 @@ class Paula2Top(Elaboratable):
         io_left=[
             "audio in 0",
             "audio in 1",
-            "",
+            "audio in 2",
             "",
             "paula out 0",
             "paula out 1",
-            "paula out 2",
+            "",
             "",
         ],
         io_right=["", "", "", "", "", "TRS MIDI in"],
@@ -104,12 +104,12 @@ class Paula2Top(Elaboratable):
         period_cc2 = midi_cfg["paula_channels"][2]["period_cc"]
         volume_cc2 = midi_cfg["paula_channels"][2]["volume_cc"]
 
-        modulation_cfg = midi_cfg.get("modulation", {})
+        atvol0_note = midi_cfg["modulation"][0]["toggle_volume_note"]
+        atper0_note = midi_cfg["modulation"][0]["toggle_period_note"]
+        atvol1_note = midi_cfg["modulation"][1]["toggle_volume_note"]
+        atper1_note = midi_cfg["modulation"][1]["toggle_period_note"]
+
         adkcon_audio_set_bits = int(midi_cfg.get("adkcon_audio_set_bits", 0)) & 0xFF
-        atvol0_note = modulation_cfg.get("toggle_atvol0_note")
-        atper0_note = modulation_cfg.get("toggle_atper0_note")
-        atvol1_note = modulation_cfg.get("toggle_atvol1_note")
-        atper1_note = modulation_cfg.get("toggle_atper1_note")
 
         self.register_mappings = {
             "AUD0PER": RegisterMapping(

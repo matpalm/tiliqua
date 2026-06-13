@@ -87,10 +87,9 @@ class Paula2Top(Elaboratable):
         ]
         play_notes = [midi_cfg["samples"][i]["play_note"] for i in range(self.NUM_CH)]
 
-        reset_cfg = midi_cfg.get("reset", {})
-        reset_audx_note = reset_cfg.get("AUDx???")
-        reset_atxxx_note = reset_cfg.get("AT???x")
-        toggle_filter_cc = midi_cfg.get("toggle_filter_cc")
+        reset_audx_note = midi_cfg["reset"]["AUDx???"]
+        reset_atxxx_note = midi_cfg["reset"]["AT???x"]
+        toggle_filter_cc = midi_cfg["reset"]["toggle_filter_cc"]
 
         # init ADKCON with no modulation
         adkcon_audio_set_bits = 0

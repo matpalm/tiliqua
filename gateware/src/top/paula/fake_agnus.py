@@ -33,7 +33,7 @@ class FakeAgnus(wiring.Component):
     CAPTURE_SECONDS = 1
 
     # capture at the default AUDxPER byte rate so dft playback rate
-    # matches recorded sample rate.
+    # matches recorded sample rate. TODO: this doesnt quite work, am missing something :/
     CAPTURE_BYTES = ((PAULA_CCK_HZ * CAPTURE_SECONDS) // (2 * DEFAULT_AUDxPER) // 2) * 2
     CAPTURE_WORDS = CAPTURE_BYTES // 2
 

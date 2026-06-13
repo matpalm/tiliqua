@@ -126,53 +126,65 @@ class Paula2Top(Elaboratable):
 
         adkcon_audio_set_bits = int(midi_cfg.get("adkcon_audio_set_bits", 0)) & 0xFF
 
-        self.register_mappings = {
-            "AUD0PER": RegisterMapping(
+        # urgh. this whole midi mapping business has ended up super weird :/
+
+        self.register_mappings = {}
+        for i in range(self.NUM_CH):
+            self.register_mappings[f"AUD{i}LEN"] = RegisterMapping(
+                enc_range=(0, 127),
+                reg_range=(1, self.PAULA_LENGTH_WORDS),
+                reg_init=self.PAULA_LENGTH_WORDS,
+            )
+            self.register_mappings[f"AUD{i}PER"] = RegisterMapping(
                 enc_range=(0, 127),
                 reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
                 reg_init=self.PAULA_BASE_PERIOD,
                 mapping="exp",
                 anchor=(64, self.PAULA_BASE_PERIOD),
-            ),
-            "AUD1PER": RegisterMapping(
-                enc_range=(0, 127),
-                reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
-                reg_init=self.PAULA_BASE_PERIOD,
-                mapping="exp",
-                anchor=(64, self.PAULA_BASE_PERIOD),
-            ),
-            "AUD0VOL": RegisterMapping(
+            )
+            self.register_mappings[f"AUD{i}VOL"] = RegisterMapping(
                 enc_range=(0, 127), reg_range=(0, 64), reg_init=64
-            ),
-            "AUD1VOL": RegisterMapping(
-                enc_range=(0, 127), reg_range=(0, 64), reg_init=64
-            ),
-            "AUD2PER": RegisterMapping(
-                enc_range=(0, 127),
-                reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
-                reg_init=self.PAULA_BASE_PERIOD,
-                mapping="exp",
-                anchor=(64, self.PAULA_BASE_PERIOD),
-            ),
-            "AUD2VOL": RegisterMapping(
-                enc_range=(0, 127), reg_range=(0, 64), reg_init=64
-            ),
-            "AUD0LEN": RegisterMapping(
-                enc_range=(0, 127),
-                reg_range=(1, self.PAULA_LENGTH_WORDS),
-                reg_init=self.PAULA_LENGTH_WORDS,
-            ),
-            "AUD1LEN": RegisterMapping(
-                enc_range=(0, 127),
-                reg_range=(1, self.PAULA_LENGTH_WORDS),
-                reg_init=self.PAULA_LENGTH_WORDS,
-            ),
-            "AUD2LEN": RegisterMapping(
-                enc_range=(0, 127),
-                reg_range=(1, self.PAULA_LENGTH_WORDS),
-                reg_init=self.PAULA_LENGTH_WORDS,
-            ),
-        }
+            )
+
+            # "AUD1PER": RegisterMapping(
+            #     enc_range=(0, 127),
+            #     reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
+            #     reg_init=self.PAULA_BASE_PERIOD,
+            #     mapping="exp",
+            #     anchor=(64, self.PAULA_BASE_PERIOD),
+            # ),
+            # "AUD0VOL": RegisterMapping(
+            #     enc_range=(0, 127), reg_range=(0, 64), reg_init=64
+            # ),
+            # "AUD1VOL": RegisterMapping(
+            #     enc_range=(0, 127), reg_range=(0, 64), reg_init=64
+            # ),
+            # "AUD2PER": RegisterMapping(
+            #     enc_range=(0, 127),
+            #     reg_range=(self.PAULA_MIDI_SLOW_PERIOD, self.PAULA_MIDI_FAST_PERIOD),
+            #     reg_init=self.PAULA_BASE_PERIOD,
+            #     mapping="exp",
+            #     anchor=(64, self.PAULA_BASE_PERIOD),
+        #     # ),
+        #     "AUD2VOL": RegisterMapping(
+        #         enc_range=(0, 127), reg_range=(0, 64), reg_init=64
+        #     ),
+        #     "AUD0LEN": RegisterMapping(
+        #         enc_range=(0, 127),
+        #         reg_range=(1, self.PAULA_LENGTH_WORDS),
+        #         reg_init=self.PAULA_LENGTH_WORDS,
+        #     ),
+        #     "AUD1LEN": RegisterMapping(
+        #         enc_range=(0, 127),
+        #         reg_range=(1, self.PAULA_LENGTH_WORDS),
+        #         reg_init=self.PAULA_LENGTH_WORDS,
+        #     ),
+        #     "AUD2LEN": RegisterMapping(
+        #         enc_range=(0, 127),
+        #         reg_range=(1, self.PAULA_LENGTH_WORDS),
+        #         reg_init=self.PAULA_LENGTH_WORDS,
+        #     ),
+        # }
 
         cc_mapping = {}  # o_O urgh
         for i in range(self.NUM_CH):

@@ -105,15 +105,15 @@ class Paula2Top(Elaboratable):
         # record_note2 = midi_cfg["samples"][2]["record_note"]
         # play_note2 = midi_cfg["samples"][2]["play_note"]
 
+        length_cc0 = midi_cfg["paula_channels"][0]["length_cc"]
         period_cc0 = midi_cfg["paula_channels"][0]["period_cc"]
         volume_cc0 = midi_cfg["paula_channels"][0]["volume_cc"]
-        length_cc0 = midi_cfg["paula_channels"][0]["length_cc"]
+        length_cc1 = midi_cfg["paula_channels"][1]["length_cc"]
         period_cc1 = midi_cfg["paula_channels"][1]["period_cc"]
         volume_cc1 = midi_cfg["paula_channels"][1]["volume_cc"]
-        length_cc1 = midi_cfg["paula_channels"][1]["length_cc"]
+        length_cc2 = midi_cfg["paula_channels"][2]["length_cc"]
         period_cc2 = midi_cfg["paula_channels"][2]["period_cc"]
         volume_cc2 = midi_cfg["paula_channels"][2]["volume_cc"]
-        length_cc2 = midi_cfg["paula_channels"][2]["length_cc"]
 
         atvol0_note = midi_cfg["modulation"][0]["toggle_volume_note"]
         atper0_note = midi_cfg["modulation"][0]["toggle_period_note"]
@@ -175,15 +175,15 @@ class Paula2Top(Elaboratable):
         }
 
         cc_mapping = {
+            length_cc0: self.register_mappings["AUD0LEN"],
             period_cc0: self.register_mappings["AUD0PER"],
             volume_cc0: self.register_mappings["AUD0VOL"],
-            length_cc0: self.register_mappings["AUD0LEN"],
+            length_cc1: self.register_mappings["AUD1LEN"],
             period_cc1: self.register_mappings["AUD1PER"],
             volume_cc1: self.register_mappings["AUD1VOL"],
-            length_cc1: self.register_mappings["AUD1LEN"],
+            length_cc2: self.register_mappings["AUD2LEN"],
             period_cc2: self.register_mappings["AUD2PER"],
             volume_cc2: self.register_mappings["AUD2VOL"],
-            length_cc2: self.register_mappings["AUD2LEN"],
         }
 
         m.submodules.midi_proc = midi_proc = MidiProcessing(
@@ -222,6 +222,7 @@ class Paula2Top(Elaboratable):
         assert len(fake_agni) == self.NUM_CH
         m.submodules += fake_agni
 
+        # TODO: generalise the state machine later for N channels. is working at least :/
         fake_agnus0 = fake_agni[0]
         fake_agnus1 = fake_agni[1]
         fake_agnus2 = fake_agni[2]
@@ -277,14 +278,14 @@ class Paula2Top(Elaboratable):
         in_shift = max(sample_width - 8, 0)
 
         raw_ins = [Signal(signed(sample_width)) for _ in range(self.NUM_CH)]
-        raw_in0 = raw_ins[0]
-        raw_in1 = raw_ins[1]
-        raw_in2 = raw_ins[2]
+        # raw_in0 = raw_ins[0]
+        # raw_in1 = raw_ins[1]
+        # raw_in2 = raw_ins[2]
 
         inN_s8 = [Signal(signed(8)) for _ in range(self.NUM_CH)]
-        in0_s8 = inN_s8[0]
-        in1_s8 = inN_s8[1]
-        in2_s8 = inN_s8[2]
+        # in0_s8 = inN_s8[0]
+        # in1_s8 = inN_s8[1]
+        # in2_s8 = inN_s8[2]
 
         pa_l = Signal(signed(15))
         pa_r = Signal(signed(15))
@@ -351,12 +352,19 @@ class Paula2Top(Elaboratable):
             self.register_mappings["AUD0LEN"].reset_to_init.eq(reset_audx_evt),
             self.register_mappings["AUD1LEN"].reset_to_init.eq(reset_audx_evt),
             self.register_mappings["AUD2LEN"].reset_to_init.eq(reset_audx_evt),
-            raw_in0.eq(pmod0.o_cal.payload[0].as_value()),
-            raw_in1.eq(pmod0.o_cal.payload[1].as_value()),
-            raw_in2.eq(pmod0.o_cal.payload[2].as_value()),
-            in0_s8.eq(raw_in0 >> in_shift),
-            in1_s8.eq(raw_in1 >> in_shift),
-            in2_s8.eq(raw_in2 >> in_shift),
+        ]
+
+        for i in range(self.NUM_CH):
+            m.d.comb += [
+                raw_ins[i].eq(pmod0.o_cal.payload[i].as_value()),
+                # raw_in1.eq(pmod0.o_cal.payload[1].as_value()),
+                # raw_in2.eq(pmod0.o_cal.payload[2].as_value()),
+                inN_s8[i].eq(raw_ins[i] >> in_shift),
+                # in1_s8.eq(raw_in1 >> in_shift),
+                # in2_s8.eq(raw_in2 >> in_shift),
+            ]
+
+        m.d.comb += [
             pa_l.eq(paudio.ldata.as_signed()),
             pa_r.eq(paudio.rdata.as_signed()),
             pa_l_x2.eq(pa_l.as_signed() << 1),

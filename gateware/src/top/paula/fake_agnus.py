@@ -32,16 +32,16 @@ class FakeAgnus(wiring.Component):
     INPUT_SAMPLE_HZ = 48_000
     CAPTURE_SECONDS = 1
 
-    # capture at the default AUDxPER byte rate so dft playback rate
-    # matches recorded sample rate. TODO: this doesnt quite work, am missing something :/
-    CAPTURE_BYTES = ((PAULA_CCK_HZ * CAPTURE_SECONDS) // (2 * DEFAULT_AUDxPER) // 2) * 2
+    # capture at the default AUDxPER byte rate so default playback rate
+    # matches recorded sample rate.
+    CAPTURE_BYTES = ((PAULA_CCK_HZ * CAPTURE_SECONDS) // DEFAULT_AUDxPER // 2) * 2
     CAPTURE_WORDS = CAPTURE_BYTES // 2
 
     # fractional capture strobe ratio over i_sample_tick events:
-    # (PAULA_CCK_HZ / (2 * DEFAULT_AUD0PER)) / INPUT_SAMPLE_HZ.
+    # (PAULA_CCK_HZ / DEFAULT_AUDxPER) / INPUT_SAMPLE_HZ.
 
     CAPTURE_NUM = PAULA_CCK_HZ
-    CAPTURE_DEN = 2 * DEFAULT_AUDxPER * INPUT_SAMPLE_HZ
+    CAPTURE_DEN = DEFAULT_AUDxPER * INPUT_SAMPLE_HZ
     CAPTURE_EDGE = CAPTURE_DEN - CAPTURE_NUM
 
     i_reset: In(1)

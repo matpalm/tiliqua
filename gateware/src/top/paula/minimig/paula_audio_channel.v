@@ -30,6 +30,12 @@ parameter  AUDPER = 4'h6;
 parameter  AUDVOL = 4'h8;
 parameter  AUDDAT = 4'ha;
 
+// attach-period (FM) tuning.
+// signed modulator sample: 0 => no change, +ve => faster, -ve => slower.
+localparam integer ATTACH_PER_SHIFT = 2;  // how extreme modulation is...
+localparam [15:0] ATTACH_PER_MIN = 16'd20;
+localparam [15:0] ATTACH_PER_MAX = 16'hffff;
+
 //local signals
 reg    [15:0] audlen;      //audio length register
 reg    [15:0] audper;      //audio period register
@@ -80,6 +86,11 @@ wire  [15:0] audper_eff;
 wire signed [9:0] attach_per_delta;
 wire signed [17:0] audper_mod;
 wire [15:0] audper_mod_sat;
+reg signed [8:0] attach_mod_sx;
+reg [8:0] attach_mod_abs;
+wire [6:0] attach_vol_ring;
+wire signed [7:0] sample_raw;
+wire signed [7:0] sample_ring;
 
 
 //length register bus write
@@ -140,12 +151,29 @@ assign  AUDxIP = intpen;  //audio interrupt pending
 
 assign intreq = AUDxIR;    //audio interrupt request
 
-assign audvol_eff[6:0] = attach_vol_en ? attach_sample[6:0] : audvol[6:0];
-assign attach_per_delta = $signed({1'b0, attach_sample}) - 10'sd128;
-assign audper_mod = $signed({2'b00, audper}) + (attach_per_delta <<< 6);
+// ring-mod style AM: magnitude controls gain, sign controls inversion.
+always @(posedge clk) begin
+  if (clk7_en) begin
+    if (reset) begin
+      attach_mod_sx <= 9'sd0;
+      attach_mod_abs <= 9'd0;
+    end else if (cck) begin
+      attach_mod_sx <= $signed({attach_sample[7], attach_sample});
+      if (attach_sample[7])
+        attach_mod_abs <= (~{attach_sample[7], attach_sample}) + 9'd1;
+      else
+        attach_mod_abs <= {attach_sample[7], attach_sample};
+    end
+  end
+end
+assign attach_vol_ring = (attach_mod_abs >= 9'd127) ? 7'd64 : ((attach_mod_abs + 9'd1) >> 1);
+assign audvol_eff[6:0] = attach_vol_en ? attach_vol_ring : audvol[6:0];
+
+assign attach_per_delta = $signed({{2{attach_sample[7]}}, attach_sample});
+assign audper_mod = $signed({2'b00, audper}) - (attach_per_delta <<< ATTACH_PER_SHIFT);
 assign audper_mod_sat =
-  (audper_mod < 18'sd121) ? 16'd121 :
-  (audper_mod > 18'sd65535) ? 16'hffff :
+  (audper_mod < $signed({2'b00, ATTACH_PER_MIN})) ? ATTACH_PER_MIN :
+  (audper_mod > $signed({2'b00, ATTACH_PER_MAX})) ? ATTACH_PER_MAX :
   audper_mod[15:0];
 assign audper_eff[15:0] = attach_per_en ? audper_mod_sat : audper[15:0];
 
@@ -215,10 +243,12 @@ always @(posedge clk) begin
 end
 
 //assign sample[7:0] = penhi ? datbuf[15:8] : datbuf[7:0];
-assign sample[7:0] = silence ? 8'b0 : (penhi ? datbuf[15:8] : datbuf[7:0]);
+assign sample_raw = penhi ? datbuf[15:8] : datbuf[7:0];
+assign sample_ring = (attach_vol_en && attach_mod_sx[8]) ? -sample_raw : sample_raw;
+assign sample[7:0] = silence ? 8'b0 : sample_ring[7:0];
 
 // By: OKK (The correct way Paula really works!)
-assign sample_okk[7:0] = (silence | !volgate ? 8'b0 : (penhi ? datbuf[15:8] : datbuf[7:0])); // pwm volume gated sample output
+assign sample_okk[7:0] = (silence | !volgate ? 8'b0 : sample_ring[7:0]); // pwm volume gated sample output
 
 //volume output
 assign volume[6:0] = audvol_eff[6:0];

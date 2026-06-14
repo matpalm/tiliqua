@@ -25,7 +25,17 @@ class Paula2Top(Elaboratable):
     NUM_CH = 4
 
     PAULA_CCK_HZ = 60_000_000 // 8  # system / clk7+1
-    PAULA_MIN_PERIOD = 121  # TODO: tune this more ?
+
+    # capture 78Hz (D#2)
+    # -> 207Hz (G#3) at PAULA_MIN_PERIOD=121
+    # -> 278Hz (C#4) at PAULA_MIN_PERIOD=90 & stable with STRHOR_RATE=160
+    # -> 313Hz (D#4) at PAULA_MIN_PERIOD=70 & stable with STRHOR_RATE=160
+    # STRHOR_RATE <= 2 x PAULA_MIN_PERIOD / some margin
+    # PAULA_MIN_PERIOD=60 & STRHOR_RATE=92 =>
+    PAULA_MIN_PERIOD = 60
+    STRHOR_RATE = int((2 * PAULA_MIN_PERIOD) / 1.3)
+    print("PAULA_MIN_PERIOD", PAULA_MIN_PERIOD, "STRHOR_RATE", STRHOR_RATE)
+
     PAULA_MAX_PERIOD = 0xFFFF
 
     PAULA_BASE_PERIOD = FakeAgnus.DEFAULT_AUDxPER
@@ -194,7 +204,9 @@ class Paula2Top(Elaboratable):
         clk7_div = Signal(range(8), init=0)
         clk7_en_pulse = Signal(init=0)
 
-        strhor_div = Signal(range(480), init=0)
+        # Higher strhor cadence raises max sustainable AUDxDAT feed rate.
+        # STRHOR_RATE=160 @ 7.5MHz -> 46.875k word req/s (~93.75k byte/s).
+        strhor_div = Signal(range(self.STRHOR_RATE), init=0)
         strhor_pulse = Signal(init=0)
 
         write_hold = Signal(range(2), init=0)
@@ -371,7 +383,7 @@ class Paula2Top(Elaboratable):
         m.d.comb += [
             adkcon_bits_to_set.eq(adkcon_target_bits & ~adkcon_written_bits),
             adkcon_bits_to_clear.eq(adkcon_written_bits & ~adkcon_target_bits),
-            strhor_pulse.eq(clk7_en_pulse & (strhor_div == 479)),
+            strhor_pulse.eq(clk7_en_pulse & (strhor_div == self.STRHOR_RATE - 1)),
         ]
 
         # TODO. this could be looped?  am currently explicitly mapping out bit values :/
@@ -445,7 +457,7 @@ class Paula2Top(Elaboratable):
             ]
 
         with m.If(clk7_en_pulse):
-            with m.If(strhor_div == 479):
+            with m.If(strhor_div == self.STRHOR_RATE - 1):
                 m.d.sync += strhor_div.eq(0)
             with m.Else():
                 m.d.sync += strhor_div.eq(strhor_div + 1)

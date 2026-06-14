@@ -16,7 +16,7 @@ from tiliqua.platform import RebootProvider
 
 from fake_agnus import FakeAgnus
 from led_low_pass import LedLowPass
-from midi import MidiProcessing, RegisterMapping
+from midi import MidiProcessing, RegisterExpMapping, RegisterLinearMapping
 from paula_audio_wrapper import PaulaAudioWrapper
 
 
@@ -98,21 +98,32 @@ class Paula2Top(Elaboratable):
 
         self.register_mappings = {}
         for i in range(self.NUM_CH):
-            self.register_mappings[f"AUD{i}LEN"] = RegisterMapping(
+            self.register_mappings[f"AUD{i}LEN"] = RegisterLinearMapping(
                 enc_range=(0, 127),
                 reg_range=(1, self.PAULA_LENGTH_WORDS),
                 reg_init=self.PAULA_LENGTH_WORDS,
             )
-            self.register_mappings[f"AUD{i}PER"] = RegisterMapping(
+            self.register_mappings[f"AUD{i}PER"] = RegisterExpMapping(
                 enc_range=(0, 127),
                 reg_range=(self.PAULA_MAX_PERIOD, self.PAULA_MIN_PERIOD),
-                reg_init=self.PAULA_BASE_PERIOD,
-                mapping="exp",
-                anchor=(64, self.PAULA_BASE_PERIOD),
+                enc_anchor=64,
+                reg_anchor=self.PAULA_BASE_PERIOD,
             )
-            self.register_mappings[f"AUD{i}VOL"] = RegisterMapping(
+            self.register_mappings[f"AUD{i}VOL"] = RegisterLinearMapping(
                 enc_range=(0, 127), reg_range=(0, 64), reg_init=64
             )
+
+        # rm = self.register_mappings[f"AUD0PER"]
+        # for cc_val in range(0, 128):
+        #     reg_val = rm.lut_values[cc_val - rm.enc_min]
+        #     print(
+        #         f"WTF AUD0PER cc={cc_val:3d} -> reg={reg_val} ( enc_min={rm.enc_min} )"
+        #     )
+        # exit()
+        # AUD0PER cc= 56 -> reg=320
+        # ...
+        # AUD0PER cc= 64 -> reg=287
+        # AUD0PER cc= 65 -> reg=283
 
         cc_mapping = {}  # o_O urgh
         for i in range(self.NUM_CH):

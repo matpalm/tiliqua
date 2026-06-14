@@ -5,7 +5,7 @@ from typing import Tuple
 from tiliqua import midi as tiliqua_midi
 
 
-class RegisterMapping(object):
+class RegisterLinearMapping(object):
     """Map unsigned controller values into a register value via LUT."""
 
     def __init__(
@@ -13,13 +13,9 @@ class RegisterMapping(object):
         enc_range: Tuple[int, int],
         reg_range: Tuple[int, int],
         reg_init: int,
-        mapping="linear",
-        anchor: Tuple[int, int] | None = None,
     ):
         self.enc_min, self.enc_max = enc_range
         self.param_min, self.param_max = reg_range
-        self.mapping = mapping
-        self.anchor = anchor
         self.reg_init = int(reg_init)
         self.lut_len = (self.enc_max - self.enc_min) + 1
 
@@ -40,46 +36,89 @@ class RegisterMapping(object):
         values = []
         span = self.lut_len - 1
 
-        def interp(v0, v1, t):
-            if self.mapping == "linear":
-                return v0 + t * (v1 - v0)
+        for i in range(self.lut_len):
+            t = i / span
+            values.append(
+                int(round(self.param_min + t * (self.param_max - self.param_min)))
+            )
+        return values
+
+    def map(self, encoder_value: Signal):
+        idx = encoder_value - self.enc_min
+        clamped_idx = Mux(
+            encoder_value <= self.enc_min,
+            0,
+            Mux(encoder_value >= self.enc_max, self.lut_len - 1, idx),
+        )
+        return self._lut[clamped_idx]
+
+
+class RegisterExpMapping(object):
+    """Map unsigned controller values into a register value via LUT."""
+
+    def __init__(
+        self,
+        enc_range: Tuple[int, int],
+        reg_range: Tuple[int, int],
+        enc_anchor: int,
+        reg_anchor: int,
+    ):
+        """
+        builds a lookup table for encoder values in enc_range that maps to values reg_range
+        on an expotential curve. anchors the mapping such that enc_anchor maps to reg_anchor
+        """
+
+        self.enc_min, self.enc_max = enc_range
+        self.param_min, self.param_max = reg_range
+        self.enc_anchor = int(enc_anchor)
+        self.reg_anchor = int(reg_anchor)
+        self.reg_init = self.reg_anchor
+
+        if self.enc_max < self.enc_min:
+            raise ValueError("enc_range max must be >= min")
+        self.enc_anchor = max(self.enc_min, min(self.enc_max, self.enc_anchor))
+        if self.param_min <= 0 or self.param_max <= 0 or self.reg_anchor <= 0:
+            raise ValueError("Exponential mapping requires positive range")
+
+        self.lut_len = (self.enc_max - self.enc_min) + 1
+
+        self.lut_values = self._build_lut_values()
+        max_val = max(self.lut_values)
+        value_bits = max(max_val, 1).bit_length()
+        value_shape = unsigned(value_bits)
+        self._lut = Array(Const(v, value_shape) for v in self.lut_values)
+
+        self.target = Signal(range(max_val + 1), init=self.reg_init)
+        self.written = Signal(range(max_val + 1), init=self.reg_init)
+        self.reset_to_init = Signal(init=0)
+
+    def _build_lut_values(self):
+        if self.lut_len == 1:
+            return [self.reg_anchor]
+
+        values = []
+
+        def interp_exp(v0, v1, t):
             ratio = v1 / v0
             return v0 * (ratio**t)
 
-        if self.anchor is None:
-            if self.mapping == "exp" and (self.param_min <= 0 or self.param_max <= 0):
-                raise ValueError("Exponential mapping requires positive range")
-
-            for i in range(self.lut_len):
-                t = i / span
-                values.append(int(round(interp(self.param_min, self.param_max, t))))
-            return values
-
-        anchor_enc, anchor_val = self.anchor
-        anchor_enc = max(self.enc_min, min(self.enc_max, anchor_enc))
-
-        if self.mapping == "exp" and (
-            self.param_min <= 0 or anchor_val <= 0 or self.param_max <= 0
-        ):
-            raise ValueError("Exponential mapping requires positive range")
-
         for i in range(self.lut_len):
             enc = self.enc_min + i
-            if enc <= anchor_enc:
-                seg_enc_min, seg_enc_max = self.enc_min, anchor_enc
-                seg_val_min, seg_val_max = self.param_min, anchor_val
+            if enc <= self.enc_anchor:
+                seg_enc_min, seg_enc_max = self.enc_min, self.enc_anchor
+                seg_val_min, seg_val_max = self.param_min, self.reg_anchor
             else:
-                seg_enc_min, seg_enc_max = anchor_enc, self.enc_max
-                seg_val_min, seg_val_max = anchor_val, self.param_max
+                seg_enc_min, seg_enc_max = self.enc_anchor, self.enc_max
+                seg_val_min, seg_val_max = self.reg_anchor, self.param_max
 
             if seg_enc_max == seg_enc_min:
                 t = 0.0
             else:
                 t = (enc - seg_enc_min) / (seg_enc_max - seg_enc_min)
 
-            values.append(int(round(interp(seg_val_min, seg_val_max, t))))
+            values.append(int(round(interp_exp(seg_val_min, seg_val_max, t))))
 
-        values[anchor_enc - self.enc_min] = int(anchor_val)
+        values[self.enc_anchor - self.enc_min] = int(self.reg_anchor)
         return values
 
     def map(self, encoder_value: Signal):

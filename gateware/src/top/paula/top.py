@@ -89,7 +89,7 @@ class Paula2Top(Elaboratable):
 
         reset_audx_note = midi_cfg["reset"]["AUDx???"]
         reset_atxxx_note = midi_cfg["reset"]["AT???x"]
-        toggle_filter_cc = midi_cfg["reset"]["toggle_filter_cc"]
+        toggle_filter_cc = midi_cfg["toggle_filter_cc"]
 
         # init ADKCON with no modulation
         adkcon_audio_set_bits = 0

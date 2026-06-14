@@ -76,7 +76,7 @@ class Paula2Top(Elaboratable):
             "audio in 3",
             "paula out L",
             "paula out R",
-            "",
+            "paula out L+R",
             "",
         ],
         io_right=["", "", "", "", "", "TRS MIDI in"],
@@ -253,6 +253,14 @@ class Paula2Top(Elaboratable):
         pa_l_out_raw = Signal(signed(ASQ.as_shape().width))
         pa_r_out_raw = Signal(signed(ASQ.as_shape().width))
 
+        l_out = Mux(filter_enabled, led_lp_l.o_sample, pa_l_out_raw)
+        r_out = Mux(filter_enabled, led_lp_r.o_sample, pa_r_out_raw)
+        lr_sum = Signal(signed(ASQ.as_shape().width + 1))
+        lr_sum_sat = Signal(signed(ASQ.as_shape().width + 1))
+        lr_out_max = (1 << (ASQ.as_shape().width - 1)) - 1
+        lr_out_min = -(1 << (ASQ.as_shape().width - 1))
+        lr_out = Signal(signed(ASQ.as_shape().width))
+
         m.d.comb += [
             pmod0.o_cal.ready.eq(1),
             pmod0.i_cal.valid.eq(1),
@@ -338,13 +346,22 @@ class Paula2Top(Elaboratable):
             pa_rst.eq(reset_ctr != 0),
             pa_l_out_raw.eq(pa_l_boost << out_shift),
             pa_r_out_raw.eq(pa_r_boost << out_shift),
-            pmod0.i_cal.payload[0]
-            .as_value()
-            .eq(Mux(filter_enabled, led_lp_l.o_sample, pa_l_out_raw)),
-            pmod0.i_cal.payload[1]
-            .as_value()
-            .eq(Mux(filter_enabled, led_lp_r.o_sample, pa_r_out_raw)),
-            pmod0.i_cal.payload[2].as_value().eq(0),
+            lr_sum.eq(l_out + r_out),
+            lr_sum_sat.eq(
+                Mux(
+                    lr_sum > C(lr_out_max, signed(ASQ.as_shape().width + 1)),
+                    C(lr_out_max, signed(ASQ.as_shape().width + 1)),
+                    Mux(
+                        lr_sum < C(lr_out_min, signed(ASQ.as_shape().width + 1)),
+                        C(lr_out_min, signed(ASQ.as_shape().width + 1)),
+                        lr_sum,
+                    ),
+                )
+            ),
+            lr_out.eq(lr_sum_sat[: ASQ.as_shape().width].as_signed()),
+            pmod0.i_cal.payload[0].as_value().eq(l_out),
+            pmod0.i_cal.payload[1].as_value().eq(r_out),
+            pmod0.i_cal.payload[2].as_value().eq(lr_out),
             pmod0.i_cal.payload[3].as_value().eq(0),
             paudio.clk7_en.eq(clk7_en_pulse),
             paudio.cck.eq(clk7_en_pulse),

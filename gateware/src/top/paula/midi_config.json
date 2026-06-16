@@ -5,6 +5,7 @@
     "AT???x": 40
   },
   "toggle_filter_cc": 20,
+  "loop_playback_cc": 24,
   "samples": [
     {
       "record_note": 44,
@@ -27,22 +28,26 @@
     {
       "length_cc": 10,
       "period_cc": 74,
-      "volume_cc": 71
+      "volume_cc": 71,
+      "start_cc": 76
     },
     {
       "length_cc": 77,
       "period_cc": 93,
-      "volume_cc": 73
+      "volume_cc": 73,
+      "start_cc": 75
     },
     {
       "length_cc": 114,
       "period_cc": 18,
-      "volume_cc": 19
+      "volume_cc": 19,
+      "start_cc": 16
     },
     {
       "length_cc": 17,
       "period_cc": 91,
-      "volume_cc": 79
+      "volume_cc": 79,
+      "start_cc": 7
     }
   ],
   "modulation": [

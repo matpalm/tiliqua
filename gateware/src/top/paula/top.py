@@ -11,12 +11,17 @@ from amaranth.lib import wiring
 from tiliqua.build.cli import top_level_cli
 from tiliqua.build.types import BitstreamHelp
 from tiliqua.dsp import ASQ
-from tiliqua.periph import eurorack_pmod
+from tiliqua.periph import eurorack_pmod, psram
 from tiliqua.platform import RebootProvider
 
 from fake_agnus import FakeAgnus
 from led_low_pass import LedLowPass
-from midi import MidiProcessing, RegisterExpMapping, RegisterLinearMapping
+from midi import (
+    MidiProcessing,
+    RegisterExpMapping,
+    RegisterLinearMapping,
+    RegisterLogMapping,
+)
 from paula_audio_wrapper import PaulaAudioWrapper
 
 
@@ -44,23 +49,28 @@ class Paula2Top(Elaboratable):
     PAULA_BASE_PERIOD = FakeAgnus.DEFAULT_AUDxPER
     PAULA_LENGTH_WORDS = FakeAgnus.CAPTURE_WORDS
     PAULA_DMA_ENABLE_MASK = 0b1111
+    PSRAM_SAMPLE_CH_STRIDE_WORDS = 0x20000
 
     AUD0LEN = 0x52  # cc10
+    # AUD0START = 0x50
     AUD0PER = 0x53  # cc74
     AUD0VOL = 0x54  # cc71
     AUD0DAT = 0x55
 
     AUD1LEN = 0x5A  # cc77
+    # AUD1START = 0x58
     AUD1PER = 0x5B  # cc93
     AUD1VOL = 0x5C  # cc73
     AUD1DAT = 0x5D
 
     AUD2LEN = 0x62  # cc114
+    # AUD2START = 0x60
     AUD2PER = 0x63  # cc18
     AUD2VOL = 0x64  # cc19
     AUD2DAT = 0x65
 
     AUD3LEN = 0x6A  # cc17
+    # AUD3START = 0x68
     AUD3PER = 0x6B  # cc91
     AUD3VOL = 0x6C  # cc79
     AUD3DAT = 0x6D
@@ -103,6 +113,7 @@ class Paula2Top(Elaboratable):
         reset_audx_note = midi_cfg["reset"]["AUDx???"]
         reset_atxxx_note = midi_cfg["reset"]["AT???x"]
         toggle_filter_cc = midi_cfg["toggle_filter_cc"]
+        loop_playback_cc = midi_cfg["loop_playback_cc"]
 
         # init ADKCON with no modulation
         adkcon_audio_set_bits = 0
@@ -111,11 +122,18 @@ class Paula2Top(Elaboratable):
 
         self.register_mappings = {}
         for i in range(self.NUM_CH):
-            self.register_mappings[f"AUD{i}LEN"] = RegisterLinearMapping(
+            self.register_mappings[f"AUD{i}LEN"] = RegisterLogMapping(
                 enc_range=(0, 127),
                 reg_range=(1, self.PAULA_LENGTH_WORDS),
                 reg_init=self.PAULA_LENGTH_WORDS,
+                curve_steepness=3.0,
             )
+            # self.register_mappings[f"AUD{i}START"] = RegisterLogMapping(
+            #     enc_range=(0, 127),
+            #     reg_range=(0, self.PAULA_LENGTH_WORDS - 1),
+            #     reg_init=0,
+            #     curve_steepness=3.0,
+            # )
             self.register_mappings[f"AUD{i}PER"] = RegisterExpMapping(
                 enc_range=(0, 127),
                 reg_range=(self.PAULA_MAX_PERIOD, self.PAULA_MIN_PERIOD),
@@ -126,12 +144,11 @@ class Paula2Top(Elaboratable):
                 enc_range=(0, 127), reg_range=(0, 64), reg_init=64
             )
 
-        # rm = self.register_mappings[f"AUD0PER"]
+        # reg = "AUD0LEN"
+        # rm = self.register_mappings[reg]
         # for cc_val in range(0, 128):
         #     reg_val = rm.lut_values[cc_val - rm.enc_min]
-        #     print(
-        #         f"WTF AUD0PER cc={cc_val:3d} -> reg={reg_val} ( enc_min={rm.enc_min} )"
-        #     )
+        #     print(f"WTF {reg} cc={cc_val:3d} -> reg={reg_val} ( enc_min={rm.enc_min} )")
         # exit()
         # AUD0PER cc= 56 -> reg=320
         # ...
@@ -142,6 +159,8 @@ class Paula2Top(Elaboratable):
         for i in range(self.NUM_CH):
             cc = midi_cfg["paula_channels"][i]["length_cc"]
             cc_mapping[cc] = self.register_mappings[f"AUD{i}LEN"]
+            # cc = midi_cfg["paula_channels"][i]["start_cc"]
+            # cc_mapping[cc] = self.register_mappings[f"AUD{i}START"]
             cc = midi_cfg["paula_channels"][i]["period_cc"]
             cc_mapping[cc] = self.register_mappings[f"AUD{i}PER"]
             cc = midi_cfg["paula_channels"][i]["volume_cc"]
@@ -149,6 +168,7 @@ class Paula2Top(Elaboratable):
 
         m.submodules.midi_proc = midi_proc = MidiProcessing(
             midi_channel=int(midi_cfg["midi_channel"]),
+            midi_cfg=midi_cfg,
             cc_mapping=cc_mapping,
             system_clk_hz=car.settings.frequencies.sync,
         )
@@ -162,33 +182,46 @@ class Paula2Top(Elaboratable):
         m.submodules.paudio = paudio = PaulaAudioWrapper()
         m.submodules.led_lp_l = led_lp_l = LedLowPass()
         m.submodules.led_lp_r = led_lp_r = LedLowPass()
+        m.submodules.psram_periph = psram_periph = psram.Peripheral(
+            size=16 * 1024 * 1024
+        )
 
         fake_agni = []
         fake_agni.append(
             FakeAgnus(
                 aud_len_addr=self.AUD0LEN,
+                aud_start_addr=None,
                 aud_dat_addr=self.AUD0DAT,
+                psram_base_word=0 * self.PSRAM_SAMPLE_CH_STRIDE_WORDS,
             )
         )
         fake_agni.append(
             FakeAgnus(
                 aud_len_addr=self.AUD1LEN,
+                aud_start_addr=None,
                 aud_dat_addr=self.AUD1DAT,
+                psram_base_word=1 * self.PSRAM_SAMPLE_CH_STRIDE_WORDS,
             )
         )
         fake_agni.append(
             FakeAgnus(
                 aud_len_addr=self.AUD2LEN,
+                aud_start_addr=None,
                 aud_dat_addr=self.AUD2DAT,
+                psram_base_word=2 * self.PSRAM_SAMPLE_CH_STRIDE_WORDS,
             )
         )
         fake_agni.append(
             FakeAgnus(
                 aud_len_addr=self.AUD3LEN,
+                aud_start_addr=None,
                 aud_dat_addr=self.AUD3DAT,
+                psram_base_word=3 * self.PSRAM_SAMPLE_CH_STRIDE_WORDS,
             )
         )
         m.submodules += fake_agni
+        for i in range(self.NUM_CH):
+            psram_periph.add_master(fake_agni[i].bus)
 
         # TODO: generalise the state machine later for N channels. is working at least :/
         fake_agnus0 = fake_agni[0]
@@ -232,9 +265,12 @@ class Paula2Top(Elaboratable):
 
         reset_audx_evt = Signal()
         reset_atxxx_evt = Signal()
+
         filter_enabled = Signal(init=1)
         filter_toggle_press_evt = Signal()
-        filter_cc_pressed = Signal(init=0)
+
+        loop_playback_enabled = Signal(init=1)
+        loop_playback_toggle_press_evt = Signal()
 
         sample_width = ASQ.as_shape().width
         in_shift = max(sample_width - 8, 0)
@@ -279,31 +315,11 @@ class Paula2Top(Elaboratable):
             ]
 
         m.d.comb += [
-            reset_audx_evt.eq(
-                C(0, 1)
-                if reset_audx_note is None
-                else (
-                    midi_proc.o_note_on_valid
-                    & (midi_proc.o_note == int(reset_audx_note))
-                )
-            ),
-            reset_atxxx_evt.eq(
-                C(0, 1)
-                if reset_atxxx_note is None
-                else (
-                    midi_proc.o_note_on_valid
-                    & (midi_proc.o_note == int(reset_atxxx_note))
-                )
-            ),
-            filter_toggle_press_evt.eq(
-                C(0, 1)
-                if toggle_filter_cc is None
-                else (
-                    midi_proc.o_cc_valid
-                    & (midi_proc.o_cc_num == int(toggle_filter_cc))
-                    & (midi_proc.o_cc_value >= 64)
-                    & (~filter_cc_pressed)
-                )
+            reset_audx_evt.eq(midi_proc.o_reset_audx_evt),
+            reset_atxxx_evt.eq(midi_proc.o_reset_atxxx_evt),
+            filter_toggle_press_evt.eq(midi_proc.o_filter_toggle_press_evt),
+            loop_playback_toggle_press_evt.eq(
+                midi_proc.o_loop_playback_toggle_press_evt
             ),
         ]
 
@@ -393,6 +409,7 @@ class Paula2Top(Elaboratable):
                 fake_agni[i].i_audio_dmas.eq(paudio.dmas[i]),
                 fake_agni[i].i_record_toggle_evt.eq(record_toggle_evts[i]),
                 fake_agni[i].i_playback_evt.eq(playback_evts[i]),
+                fake_agni[i].i_loop_playback.eq(loop_playback_enabled),
                 fake_agni[i].i_sample_tick.eq(sample_tick),
                 fake_agni[i].i_sample_in.eq(inN_s8[i].as_unsigned()),
                 fake_agni[i].i_reg_write.eq(reg_write),
@@ -495,17 +512,14 @@ class Paula2Top(Elaboratable):
             m.d.sync += adkcon_target_bits.eq(adkcon_target_bits ^ adkcon_toggle_mask)
 
         with m.If(pa_rst):
-            m.d.sync += filter_cc_pressed.eq(0)
-        if toggle_filter_cc is not None:
-            with m.Elif(
-                midi_proc.o_cc_valid & (midi_proc.o_cc_num == int(toggle_filter_cc))
-            ):
-                m.d.sync += filter_cc_pressed.eq(midi_proc.o_cc_value >= 64)
-
-        with m.If(pa_rst):
             m.d.sync += filter_enabled.eq(1)
         with m.Elif(filter_toggle_press_evt):
             m.d.sync += filter_enabled.eq(~filter_enabled)
+
+        with m.If(pa_rst):
+            m.d.sync += loop_playback_enabled.eq(1)
+        with m.Elif(loop_playback_toggle_press_evt):
+            m.d.sync += loop_playback_enabled.eq(~loop_playback_enabled)
 
         with m.If(clk7_en_pulse & ~pa_rst):
             with m.If(strhor_pulse):
@@ -650,6 +664,10 @@ class Paula2Top(Elaboratable):
                         aud1len = self.register_mappings["AUD1LEN"]
                         aud2len = self.register_mappings["AUD2LEN"]
                         aud3len = self.register_mappings["AUD3LEN"]
+                        # aud0start = self.register_mappings["AUD0START"]
+                        # aud1start = self.register_mappings["AUD1START"]
+                        # aud2start = self.register_mappings["AUD2START"]
+                        # aud3start = self.register_mappings["AUD3START"]
 
                         with m.If(adkcon_bits_to_set != 0):
                             m.d.sync += [
@@ -735,6 +753,38 @@ class Paula2Top(Elaboratable):
                                 aud3vol.written.eq(aud3vol.target),
                                 write_hold.eq(1),
                             ]
+                        # with m.Elif(aud0start.target != aud0start.written):
+                        #     m.d.sync += [
+                        #         reg_addr.eq(self.AUD0START),
+                        #         reg_data.eq(aud0start.target),
+                        #         reg_write.eq(1),
+                        #         aud0start.written.eq(aud0start.target),
+                        #         write_hold.eq(1),
+                        #     ]
+                        # with m.Elif(aud1start.target != aud1start.written):
+                        #     m.d.sync += [
+                        #         reg_addr.eq(self.AUD1START),
+                        #         reg_data.eq(aud1start.target),
+                        #         reg_write.eq(1),
+                        #         aud1start.written.eq(aud1start.target),
+                        #         write_hold.eq(1),
+                        #     ]
+                        # with m.Elif(aud2start.target != aud2start.written):
+                        #     m.d.sync += [
+                        #         reg_addr.eq(self.AUD2START),
+                        #         reg_data.eq(aud2start.target),
+                        #         reg_write.eq(1),
+                        #         aud2start.written.eq(aud2start.target),
+                        #         write_hold.eq(1),
+                        #     ]
+                        # with m.Elif(aud3start.target != aud3start.written):
+                        #     m.d.sync += [
+                        #         reg_addr.eq(self.AUD3START),
+                        #         reg_data.eq(aud3start.target),
+                        #         reg_write.eq(1),
+                        #         aud3start.written.eq(aud3start.target),
+                        #         write_hold.eq(1),
+                        #     ]
                         with m.Elif(aud0len.target != aud0len.written):
                             m.d.sync += [
                                 reg_addr.eq(self.AUD0LEN),

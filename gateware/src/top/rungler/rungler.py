@@ -28,7 +28,7 @@ class Rungler(Elaboratable):
         with m.If(osc1_rising):
             # xor bits 7 and 6 with data ( is this right? )
             feedback = Signal()
-            m.d.comb += feedback.eq(shift_reg[7] ^ shift_reg[6] ^ self.osc2_data)
+            m.d.comb += feedback.eq(shift_reg[3] ^ shift_reg[6] ^ self.osc2_data)
             # shift left into feedback
             m.d.sync += shift_reg.eq(Cat(feedback, shift_reg[0:7]))
 

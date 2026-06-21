@@ -57,6 +57,7 @@ sid                = "src/top/sid/top.py"
 sampler            = "src/top/sampler/top.py"
 # (Non-SoC bitstreams)
 dsp                = "src/top/dsp/top.py"
+rungler            = "src/top/rungler/top.py"
 beamrace           = "src/top/beamrace/top.py"
 vectorscope_no_soc = "src/top/vectorscope_no_soc/top.py"
 bootstub           = "src/top/bootstub/top.py"

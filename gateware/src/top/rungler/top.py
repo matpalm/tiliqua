@@ -1,3 +1,5 @@
+import sys
+
 from amaranth import *
 from amaranth.lib import data, stream, wiring
 from amaranth.lib.cdc import FFSynchronizer
@@ -5,41 +7,14 @@ from amaranth.lib.wiring import In, Out
 
 from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
-from tiliqua.build.types import BitstreamHelp
-from tiliqua.dsp import ASQ
 from tiliqua.periph import eurorack_pmod
 from tiliqua.platform import RebootProvider
 
-
-class Mirror(wiring.Component):
-
-    i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
-    o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
-
-    bitstream_help = BitstreamHelp(
-        brief="Audio passthrough",
-        io_left=[
-            "in0",
-            "in1",
-            "in2",
-            "in3",
-            "in0 (copy)",
-            "in1 (copy)",
-            "in2 (copy)",
-            "in3 (copy)",
-        ],
-        io_right=["", "", "", "", "", ""],
-    )
-
-    def elaborate(self, platform):
-        m = Module()
-        wiring.connect(m, wiring.flipped(self.i), wiring.flipped(self.o))
-        return m
-
+from benjolin import Benjolin
 
 class CoreTop(Elaboratable):
     def __init__(self, clock_settings):
-        self.core = Mirror()
+        self.core = Benjolin()
         self.core.audio_clock = clock_settings.audio_clock
         self.clock_settings = clock_settings
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)

@@ -150,9 +150,10 @@ class CoreTop(Elaboratable):
         self.clock_settings = clock_settings
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
 
-        # Only if this core uses PSRAM
-        if hasattr(self.core, "bus"):
-            self.psram_periph = psram.Peripheral(size=16 * 1024 * 1024)
+        # One PSRAM peripheral shared across all activation cache buses.
+        self.psram_periph = psram.Peripheral(size=16 * 1024 * 1024)
+        for i in range(len(self.core.qb_model.activation_caches)):
+            self.psram_periph.add_master(getattr(self.core.qb_model, f"bus_act{i}"))
 
         # Forward bitstream_help from the core if it exists
         if hasattr(self.core, "bitstream_help"):
@@ -184,9 +185,7 @@ class CoreTop(Elaboratable):
         wiring.connect(m, self.core.o, pmod0.i_cal)
         m.d.comb += self.core.jack.eq(pmod0.jack)
 
-        if hasattr(self.core, "bus"):
-            m.submodules.psram_periph = self.psram_periph
-            wiring.connect(m, self.core.bus, self.psram_periph.bus)
+        m.submodules.psram_periph = self.psram_periph
 
         return m
 

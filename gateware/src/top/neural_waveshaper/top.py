@@ -150,9 +150,9 @@ class CoreTop(Elaboratable):
         self.clock_settings = clock_settings
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
 
-        # One PSRAM peripheral shared across all activation cache buses.
+        # One PSRAM peripheral shared across the PSRAM backed activation caches.
         self.psram_periph = psram.Peripheral(size=16 * 1024 * 1024)
-        for i in range(len(self.core.qb_model.activation_caches)):
+        for i in self.core.qb_model.psram_cache_indices:
             self.psram_periph.add_master(getattr(self.core.qb_model, f"bus_act{i}"))
 
         # Forward bitstream_help from the core if it exists

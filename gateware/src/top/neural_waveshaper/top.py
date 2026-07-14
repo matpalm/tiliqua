@@ -35,7 +35,8 @@ if RUN is None:
 sys.path.insert(0, f"{CDCC_ROOT}/amaranth_version/src")
 from cdcc import NNQ
 from cdcc.qb_network import QbNetwork
-from cdcc.cosine_estimator import CosineEstimator
+# from cdcc.cosine_estimator import CosineEstimator
+from cdcc.quadrature_generator import QuadratureGenerator
 
 class NeuralWaveshaper(wiring.Component):
 
@@ -48,14 +49,14 @@ class NeuralWaveshaper(wiring.Component):
     bitstream_help = BitstreamHelp(
         brief="Neural waveshaper.",
         io_left=[
-            "core sine wave",
-            "core cosine wave",
-            "embedding x",
-            "embedding y",
+            "IGNORED",
+            "a_cv",
+            "b_cv",
+            "morph_cv",
             "waveshaped with lpf",
             "waveshaped",
-            "",
-            "",
+            "sin_q",
+            "cos_q",
         ],
         io_right=["", "", "", "", "", ""],
     )
@@ -71,46 +72,28 @@ class NeuralWaveshaper(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        # network mapping 4 in to 1 out
+        # network mapping 5 in to 1 out
         m.submodules.qb_model = self.qb_model
 
         # post network low pass filter
         m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
-        # a cosine estimator driven from in0 sine wave
-        # fed to network if in1 is not patched.
-        m.submodules.ce = ce = CosineEstimator(shape=ASQ)
-        estimated_cosine_nnq = Signal(NNQ)
-        m.d.comb += estimated_cosine_nnq.eq(ce.o.payload)
+        # HACK! cosine generator running at fixed rate to feed network in0 and in1
+        # ( i.payload[0], which used to be the triangle core wave, is ignored )
+        # we match the amplitude of the sin/cos derived from the original triangle core
+        # wave which had amp=0.53 from module ( for whatever reason ) and use 400Hz
+        # which was the data used for plotting during training
+        m.submodules.quadrature_generator = quadrature_generator = QuadratureGenerator(
+            sample_rate=48_000, freq_hz=400, amplitude=0.53
+        )
+        m.d.comb += self.qb_model.i.payload[0].eq(quadrature_generator.o.payload[0])
+        m.d.comb += self.qb_model.i.payload[1].eq(quadrature_generator.o.payload[1])
 
-        # delay model input a bit since ce is delayed one.
-        accepted = Signal()
-        input_d = Array(Signal(NNQ, name=f"input_d_k{k}") for k in range(4))
-
-        m.d.comb += accepted.eq(self.i.valid & self.qb_model.i.ready)
-        with m.If(accepted):
-            for c in range(4):
-                m.d.sync += input_d[c].eq(self.i.payload[c])
-
-        # connect in0 (sin) to the in1 (cos) estimator
-        m.d.comb += [
-            ce.i.payload.eq(self.i.payload[0]),
-            ce.i.valid.eq(accepted),
-            ce.o.ready.eq(1),
-        ]
-
-        # map inputs from ASQ input to NNQ for model
-        # quadrature model is (sin x, cos x, e0, e1)
-        # ( in1 normalled to the estimated cosine from in0 )
-        model_input = Array(Signal(NNQ, name=f"model_input_k{k}") for k in range(4))
-        for c in range(4):
-            if c == 1:
-                m.d.comb += model_input[1].eq(
-                    Mux(self.jack[1], input_d[1], estimated_cosine_nnq)
-                )
-            else:
-                m.d.comb += model_input[c].eq(input_d[c])
-            m.d.comb += self.qb_model.i.payload[c].eq(model_input[c])
+        # a_cv, b_cv and morph_cv connect to model in2, 3, 4
+        # eq() handles the conversion from ASQ to NNQ
+        m.d.comb += self.qb_model.i.payload[2].eq(self.i.payload[1])
+        m.d.comb += self.qb_model.i.payload[3].eq(self.i.payload[2])
+        m.d.comb += self.qb_model.i.payload[4].eq(self.i.payload[3])
 
         # The model only outputs one value (on out0),
         # saturate to ASQ and output a filtered and unfiltered version
@@ -123,15 +106,16 @@ class NeuralWaveshaper(wiring.Component):
             post_lpf.shift.eq(1),
             self.o.payload[0].eq(post_lpf.o.payload),
             self.o.payload[1].eq(saturated_waveshaped_out),
-            self.o.payload[2].eq(0),
-            self.o.payload[3].eq(estimated_cosine_nnq),
+            self.o.payload[2].eq(quadrature_generator.o.payload[0]),
+            self.o.payload[3].eq(quadrature_generator.o.payload[1]),
         ]
 
         # wire up ready and valid
-        # TODO: could wiring.connect do all this?
         m.d.comb += [
-            self.qb_model.i.valid.eq(ce.o.valid),
-            self.i.ready.eq(self.qb_model.i.ready),
+            quadrature_generator.i.valid.eq(1),  # always requesting a sample
+            self.qb_model.i.valid.eq(self.i.valid & quadrature_generator.o.valid),
+            self.i.ready.eq(self.qb_model.i.ready & quadrature_generator.o.valid),
+            quadrature_generator.o.ready.eq(self.i.valid & self.qb_model.i.ready),
             post_lpf.i.valid.eq(self.qb_model.o.valid),
             self.qb_model.o.ready.eq(post_lpf.i.ready),
             post_lpf.o.ready.eq(self.o.ready),

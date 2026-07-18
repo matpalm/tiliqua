@@ -4,7 +4,6 @@ Neural waveshaper
 
 import math
 import sys
-import pickle
 import os
 
 from amaranth_future import fixed
@@ -31,10 +30,10 @@ import os
 INR_ROOT = "/home/mat/dev/inr_waveshaper/"
 sys.path.insert(0, INR_ROOT)
 
-from amaranth_v.rff import RandomFourierFeaturesLUT
+from amaranth_v.rff_network import RffNetwork, load_weights
 
 
-class NeuralWaveshaper(wiring.Component):
+class INRWaveshaper(wiring.Component):
 
     i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
     o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
@@ -59,54 +58,73 @@ class NeuralWaveshaper(wiring.Component):
 
     def __init__(self):
         WEIGHTS_PKL = os.getenv("WEIGHTS_PKL")
-        if not os.path.exists(WEIGHTS_PKL):
+        if not WEIGHTS_PKL or not os.path.exists(WEIGHTS_PKL):
             raise Exception(f"failed to load weights for WEIGHTS_PKL=[{WEIGHTS_PKL}]")
         print(f"loading weights from {WEIGHTS_PKL}")
-        with open(WEIGHTS_PKL, "rb") as f:
-            weights = pickle.load(f)  # don't shadow amaranth.lib.data
+        weights = load_weights(WEIGHTS_PKL)
         lut_size = int(os.getenv("LUT_SIZE"))
-        self.rff_lut = RandomFourierFeaturesLUT.from_rff(
-            weights["rff"], lut_size=lut_size
-        )
+
+        self.net = RffNetwork(weights, lut_size=lut_size)
         super().__init__()
 
     def elaborate(self, platform):
         m = Module()
+        m.submodules.net = net = self.net
 
-        # --- SIZING-ONLY WIRING -------------------------------------------------
-        # This connects the RandomFourierFeaturesLUT into the datapath purely so
-        # yosys elaborates it and reports its device utilisation. The signal path
-        # is NOT correct in any way: the RFF input is taken from audio ch0 and all
-        # RFF outputs are summed back into the audio outputs just to keep every
-        # LUT / multiplier / register alive (unused logic would be optimised away).
-        m.submodules.rff_lut = rff_lut = self.rff_lut
+        # ASQ (audio) and the network's io fixed-point shape differ in scale;
+        # convert by aligning fractional bits (preserving the real value) on the
+        # way in, and saturating back into ASQ on the way out.
+        io_f = net.io_shape.f_bits
+        io_i = net.io_shape.i_bits
+        IOQ = fixed.SQ(io_i, io_f)  # tiliqua-side view of the network io shape
 
-        io_bits = rff_lut._io_bits
-        n_out = 2 * rff_lut._num_features
+        # internal phase ramp: just generate a -1,1 ramp running at A4.
+        # TODO: hook up v/oct
+        SAMPLE_RATE_HZ = 192_000
+        PHASE_FREQ_HZ = 440  # A4
+        io_w = io_i + io_f
+        phase_one = 1 << io_f  # fixed-point code for +1.0
+        phase_step = round(PHASE_FREQ_HZ / SAMPLE_RATE_HZ * (1 << (io_f + 1)))
+        phase = Signal(signed(io_w))
+        phase_next = Signal(signed(io_w))
+        m.d.comb += phase_next.eq(phase + phase_step)
+        with m.If(net.i.valid & net.i.ready):
+            with m.If(phase_next >= phase_one):
+                m.d.sync += phase.eq(phase_next - (phase_one << 1))
+            with m.Else():
+                m.d.sync += phase.eq(phase_next)
 
-        in0 = Value.cast(self.i.payload[0])
+        # net in0 comes from the phase
+        # net in1 and in2 come from tiliqua in1 and in2
+        m.d.comb += net.i.payload[0].as_value().eq(phase)
+        m.d.comb += (
+            net.i.payload[1].as_value().eq(self.i.payload[1].reshape(io_f).as_value())
+        )
+        m.d.comb += (
+            net.i.payload[2].as_value().eq(self.i.payload[2].reshape(io_f).as_value())
+        )
+
+        # pass net out0 -> tiliqua out0 ( as ASQ )
+        # set other outs to 0
+        o_io = IOQ(net.o.payload[0].as_value())
+        m.d.comb += self.o.payload[0].eq(o_io.saturate(ASQ))
+        for ch in [1, 2, 3]:
+            m.d.comb += self.o.payload[ch].eq(0)
+
+        # stream handshake: one audio frame in -> one network eval -> one out.
         m.d.comb += [
-            rff_lut.i.payload.eq(in0),  # auto-resizes to signed(io_bits)
-            rff_lut.i.valid.eq(self.i.valid),
-            self.i.ready.eq(rff_lut.i.ready),
-            rff_lut.o.ready.eq(self.o.ready),
-            self.o.valid.eq(rff_lut.o.valid),
+            net.i.valid.eq(self.i.valid),
+            self.i.ready.eq(net.i.ready),
+            net.o.ready.eq(self.o.ready),
+            self.o.valid.eq(net.o.valid),
         ]
-
-        # sum every RFF output so none of the datapath is pruned
-        acc = Signal(signed(io_bits + (n_out - 1).bit_length() + 1))
-        m.d.comb += acc.eq(sum((rff_lut.o.payload[j] for j in range(n_out)), Const(0)))
-
-        for ch in range(4):
-            m.d.comb += Value.cast(self.o.payload[ch]).eq(acc)
-
         return m
 
 
 class CoreTop(Elaboratable):
 
     def __init__(self, clock_settings):
-        self.core = NeuralWaveshaper()
+        self.core = INRWaveshaper()
         self.core.audio_clock = clock_settings.audio_clock
         self.touch = False
         self.clock_settings = clock_settings

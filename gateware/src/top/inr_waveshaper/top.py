@@ -30,8 +30,7 @@ import os
 INR_ROOT = "/home/mat/dev/inr_waveshaper/"
 sys.path.insert(0, INR_ROOT)
 
-from amaranth_v.rff_network import RffNetwork, load_weights
-
+from amaranth_v.rff_network import RffNetwork, load_weights_and_config
 
 class INRWaveshaper(wiring.Component):
 
@@ -44,14 +43,14 @@ class INRWaveshaper(wiring.Component):
     bitstream_help = BitstreamHelp(
         brief="Neural waveshaper.",
         io_left=[
+            "TODO",
+            "e0",
+            "e1",
+            "-",
+            "waveshaped",
+            "waveshaped lpf",
             "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
+            "phase",
         ],
         io_right=["", "", "", "", "", ""],
     )
@@ -61,15 +60,15 @@ class INRWaveshaper(wiring.Component):
         if not WEIGHTS_PKL or not os.path.exists(WEIGHTS_PKL):
             raise Exception(f"failed to load weights for WEIGHTS_PKL=[{WEIGHTS_PKL}]")
         print(f"loading weights from {WEIGHTS_PKL}")
-        weights = load_weights(WEIGHTS_PKL)
-        lut_size = int(os.getenv("LUT_SIZE"))
-
-        self.net = RffNetwork(weights, lut_size=lut_size)
+        weights, quant_sizes, model_config = load_weights_and_config(WEIGHTS_PKL)
+        self.net = RffNetwork(weights, quant_sizes, model_config)
         super().__init__()
 
     def elaborate(self, platform):
         m = Module()
         m.submodules.net = net = self.net
+
+        m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
         # ASQ (audio) and the network's io fixed-point shape differ in scale;
         # convert by aligning fractional bits (preserving the real value) on the
@@ -96,25 +95,33 @@ class INRWaveshaper(wiring.Component):
 
         # net in0 comes from the phase
         # net in1 and in2 come from tiliqua in1 and in2
-        m.d.comb += net.i.payload[0].as_value().eq(phase)
-        m.d.comb += (
-            net.i.payload[1].as_value().eq(self.i.payload[1].reshape(io_f).as_value())
-        )
-        m.d.comb += (
-            net.i.payload[2].as_value().eq(self.i.payload[2].reshape(io_f).as_value())
-        )
+        m.d.comb += [
+            net.i.payload[0].as_value().eq(phase),
+            net.i.payload[1].as_value().eq(self.i.payload[1].reshape(io_f).as_value()),
+            net.i.payload[2].as_value().eq(self.i.payload[2].reshape(io_f).as_value()),
+        ]
 
-        # pass net out0 -> tiliqua out0 ( as ASQ )
+        # set waveshaped output net out0 -> tiliqua out0 ( as ASQ )
+        # set lowpassed version on out1 ( delayed one cycle )
+        # set ou2 to 0
+        # pass the phase ( from above ) -> tiliqua out3 ( as ASQ )
         # set other outs to 0
         o_io = IOQ(net.o.payload[0].as_value())
-        m.d.comb += self.o.payload[0].eq(o_io.saturate(ASQ))
-        for ch in [1, 2, 3]:
-            m.d.comb += self.o.payload[ch].eq(0)
+        m.d.comb += [
+            post_lpf.i.payload.eq(o_io.saturate(ASQ)),
+            post_lpf.shift.eq(1),
+            self.o.payload[0].eq(o_io.saturate(ASQ)),
+            self.o.payload[1].eq(post_lpf.o.payload),
+            self.o.payload[2].eq(0),
+            self.o.payload[3].eq(IOQ(phase).saturate(ASQ)),
+        ]
 
         # stream handshake: one audio frame in -> one network eval -> one out.
         m.d.comb += [
             net.i.valid.eq(self.i.valid),
             self.i.ready.eq(net.i.ready),
+            post_lpf.i.valid.eq(net.o.valid),
+            post_lpf.o.ready.eq(self.o.ready),
             net.o.ready.eq(self.o.ready),
             self.o.valid.eq(net.o.valid),
         ]

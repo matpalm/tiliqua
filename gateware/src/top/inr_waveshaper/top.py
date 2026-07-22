@@ -93,13 +93,14 @@ class INRWaveshaper(wiring.Component):
             with m.Else():
                 m.d.sync += phase.eq(phase_next)
 
-        # net in0 comes from the phase
-        # net in1 and in2 come from tiliqua in1 and in2
-        m.d.comb += [
-            net.i.payload[0].as_value().eq(phase),
-            net.i.payload[1].as_value().eq(self.i.payload[1].reshape(io_f).as_value()),
-            net.i.payload[2].as_value().eq(self.i.payload[2].reshape(io_f).as_value()),
-        ]
+        # map tiliqua inputs to network as required
+        print("net in_d", self.net.in_d, "out_d", self.net.out_d)
+        for ch in range(self.net.in_d):
+            m.d.comb += (
+                net.i.payload[ch]
+                .as_value()
+                .eq(self.i.payload[ch].reshape(io_f).as_value())
+            )
 
         # set waveshaped output net out0 -> tiliqua out0 ( as ASQ )
         # set lowpassed version on out1 ( delayed one cycle )

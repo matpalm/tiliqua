@@ -70,7 +70,14 @@ class INRWaveshaper(wiring.Component):
     def elaborate(self, platform):
         m = Module()
         m.submodules.net = net = self.net
-        m.submodules.ramp = ramp = RampVOct()
+        # ASQ 1.0 == 8.192V.
+        ramp = RampVOct()
+        ramp.V_MIN = RampVOct.V_MIN / 8.192
+        ramp.V_MAX = RampVOct.V_MAX / 8.192
+        ramp.F0_HZ = RampVOct.F0_HZ
+        ramp.OCTAVES = RampVOct.OCTAVES
+        ramp.RAMP_V = 0.5  # training data is +- 0.5
+        m.submodules.ramp = ramp
 
         m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
@@ -81,22 +88,16 @@ class INRWaveshaper(wiring.Component):
         io_i = net.io_shape.i_bits
         IOQ = fixed.SQ(io_i, io_f)  # tiliqua-side view of the network io shape
 
-        # convert ASQ in0 to volts for RampVOct (ASQ 1.0 == 8.192V),
-        # then feed ramp phase into network input 0.
-        in0_volts = (ASQ(self.i.payload[0].as_value()) * fixed.Const(8.192)).saturate(
-            NNQ
-        )
+        # Feed ASQ in0 directly into RampVOct after an f_bits align
+        # (ASQ/NNQ both use signed 16-bit storage, different f_bits).
+        in0_for_ramp = ASQ(self.i.payload[0].as_value()).reshape(NNQ.f_bits)
         m.d.comb += [
-            ramp.i.payload.eq(in0_volts),
+            ramp.i.payload.eq(in0_for_ramp),
             ramp.i.valid.eq(self.i.valid),
             ramp.o.ready.eq(net.i.ready),
         ]
 
-        # Training used phase in [-0.5, +0.5] where +/-5V corresponds to
-        # +/-0.5. RampVOct emits volts, so scale by 0.1 before feeding net0.
-        phase_for_net = (
-            NNQ(ramp.o.payload.as_value()) * fixed.Const(0.1, shape=NNQ)
-        ).saturate(NNQ)
+        phase_for_net = NNQ(ramp.o.payload.as_value())
 
         # map tiliqua inputs to network as required
         print("net in_d", self.net.in_d, "out_d", self.net.out_d)
@@ -118,18 +119,30 @@ class INRWaveshaper(wiring.Component):
         # set waveshaped output net out0 -> tiliqua out0 ( as ASQ )
         # set lowpassed version on out1 ( delayed one cycle )
         o_io = IOQ(net.o.payload[0].as_value())
-        # RampVOct outputs NNQ values in *volts*; convert volts -> ASQ units
-        # (ASQ 1.0 == 8.192V) before driving the codec output.
-        ramp_asq = (
-            NNQ(ramp.o.payload.as_value()) * fixed.Const(0.1220703125, shape=NNQ)
-        ).saturate(ASQ)
+
+        # mirror the phase ramp on out3 at +/-5V in ASQ units.
+        # phase_for_net is +/-0.5; scale by (5/8.192)/0.5 = 625/512
+        ramp_code = Signal(signed(NNQ.width))
+        ramp_scaled_num = Signal(signed(NNQ.width + 10))
+        ramp_asq_code = Signal(signed(ASQ.width))
+        m.d.comb += [
+            ramp_code.eq(phase_for_net.as_value()),
+            ramp_scaled_num.eq(
+                (ramp_code << 9)
+                + (ramp_code << 6)
+                + (ramp_code << 5)
+                + (ramp_code << 4)
+                + ramp_code
+            ),
+            ramp_asq_code.eq(ramp_scaled_num >> 6),
+        ]
         m.d.comb += [
             post_lpf.i.payload.eq(o_io.saturate(ASQ)),
             post_lpf.shift.eq(1),
             self.o.payload[0].eq(o_io.saturate(ASQ)),
             self.o.payload[1].eq(post_lpf.o.payload),
             self.o.payload[2].eq(0),
-            self.o.payload[3].eq(ramp_asq),
+            self.o.payload[3].as_value().eq(ramp_asq_code),
         ]
 
         # stream handshake: one audio frame in -> one network eval -> one out.

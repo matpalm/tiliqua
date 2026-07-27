@@ -31,18 +31,11 @@ INR_ROOT = "/home/mat/dev/inr_waveshaper/"
 sys.path.insert(0, INR_ROOT)
 
 # from amaranth_v.rff_concat_network import RffNetwork, load_weights_and_config
-# from amaranth_v.rff_film_network import RffNetwork, load_weights_and_config
-from amaranth_v.rff_network_builder import load_and_build_network
+from amaranth_v.rff_film_network import RffNetwork
 from amaranth_v import NNQ
 from amaranth_v.ramp_v_oct import RampVOct
 
 class INRWaveshaper(wiring.Component):
-
-    i: In(stream.Signature(data.ArrayLayout(ASQ, 4)))
-    o: Out(stream.Signature(data.ArrayLayout(ASQ, 4)))
-
-    # Jack detection (directly from pmod hardware)
-    jack: In(unsigned(8))
 
     bitstream_help = BitstreamHelp(
         brief="Neural waveshaper.",
@@ -64,12 +57,24 @@ class INRWaveshaper(wiring.Component):
         if not WEIGHTS_PKL or not os.path.exists(WEIGHTS_PKL):
             raise Exception(f"failed to load weights for WEIGHTS_PKL=[{WEIGHTS_PKL}]")
         print(f"loading weights from {WEIGHTS_PKL}")
-        self.net = load_and_build_network(WEIGHTS_PKL)
-        super().__init__()
+        self.net = RffNetwork.build(WEIGHTS_PKL)
+        super().__init__(
+            {
+                "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
+                "o": Out(stream.Signature(data.ArrayLayout(ASQ, 4))),
+                # Jack detection (directly from pmod hardware)
+                "jack": In(unsigned(8)),
+                # 32-bit wishbone master to PSRAM for the phase->h table. Built
+                # once at startup, then read-only during inference.
+                "bus_h": Out(self.net.bus_signature),
+            }
+        )
 
     def elaborate(self, platform):
         m = Module()
         m.submodules.net = net = self.net
+        # phase->h table lives in PSRAM; expose the net's wishbone master.
+        wiring.connect(m, net.bus_h, wiring.flipped(self.bus_h))
         # ASQ 1.0 == 8.192V.
         ramp = RampVOct()
         ramp.V_MIN = RampVOct.V_MIN / 8.192
@@ -139,11 +144,15 @@ class INRWaveshaper(wiring.Component):
         m.d.comb += [
             post_lpf.i.payload.eq(o_io.saturate(ASQ)),
             post_lpf.shift.eq(1),
-            self.o.payload[0].eq(o_io.saturate(ASQ)),
-            self.o.payload[1].eq(post_lpf.o.payload),
             self.o.payload[2].eq(0),
             self.o.payload[3].as_value().eq(ramp_asq_code),
         ]
+        # mute the waveshaped outputs until the startup phase->h build completes.
+        with m.If(net.ready):
+            m.d.comb += [
+                self.o.payload[0].eq(o_io.saturate(ASQ)),
+                self.o.payload[1].eq(post_lpf.o.payload),
+            ]
 
         # stream handshake: one audio frame in -> one network eval -> one out.
         m.d.comb += [
@@ -166,10 +175,10 @@ class CoreTop(Elaboratable):
         self.clock_settings = clock_settings
         self.pmod0 = eurorack_pmod.EurorackPmod(clock_settings.audio_clock)
 
-        # One PSRAM peripheral shared across the PSRAM backed activation caches.
-        # self.psram_periph = psram.Peripheral(size=16 * 1024 * 1024)
-        # for i in self.core.qb_model.psram_cache_indices:
-        #    self.psram_periph.add_master(getattr(self.core.qb_model, f"bus_act{i}"))
+        # One PSRAM peripheral backing the phase->h table (built once at startup,
+        # read-only during inference).
+        self.psram_periph = psram.Peripheral(size=16 * 1024 * 1024)
+        self.psram_periph.add_master(self.core.bus_h)
 
         # Forward bitstream_help from the core if it exists
         if hasattr(self.core, "bitstream_help"):
@@ -201,7 +210,7 @@ class CoreTop(Elaboratable):
         wiring.connect(m, self.core.o, pmod0.i_cal)
         m.d.comb += self.core.jack.eq(pmod0.jack)
 
-        #        m.submodules.psram_periph = self.psram_periph
+        m.submodules.psram_periph = self.psram_periph
 
         return m
 

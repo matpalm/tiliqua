@@ -5,6 +5,7 @@ Neural waveshaper
 import math
 import sys
 import os
+from pathlib import Path
 
 from amaranth_future import fixed
 
@@ -29,6 +30,27 @@ import os
 
 INR_ROOT = "/home/mat/dev/inr_waveshaper/"
 sys.path.insert(0, INR_ROOT)
+
+
+def _resolve_phase_h_payload_path(weights_pkl_path: str) -> str | None:
+    """Find phase_h payload generated from qkeras run artifacts."""
+    env_path = os.getenv("PHASE_H_BIN")
+    if env_path:
+        if os.path.exists(env_path):
+            return env_path
+        print(f"warning: PHASE_H_BIN set but file not found: {env_path}")
+
+    try:
+        w = Path(weights_pkl_path).resolve()
+        # Expected layout: .../runs/<run>/weights/qkeras/latest.pkl
+        run_dir = w.parent.parent.parent
+        candidate = run_dir / "phase_h.bin"
+        if candidate.exists():
+            return str(candidate)
+    except Exception as ex:
+        print(f"warning: failed to derive phase_h.bin path: {ex}")
+    return None
+
 
 # from amaranth_v.rff_concat_network import RffNetwork, load_weights_and_config
 from amaranth_v.rff_film_network import RffNetwork
@@ -217,9 +239,30 @@ class CoreTop(Elaboratable):
 
 if __name__ == "__main__":
     this_path = os.path.dirname(os.path.realpath(__file__))
+    weights_pkl = os.getenv("WEIGHTS_PKL")
+    phase_h_payload = (
+        _resolve_phase_h_payload_path(weights_pkl) if weights_pkl else None
+    )
+    if not phase_h_payload:
+        raise FileNotFoundError(
+            "phase_h.bin payload is required for preload-only PhaseHLutPS. "
+            "Generate it with: "
+            "uv run -m qkeras_v.export_phase_h_table --weights-pkl <...>/latest.pkl --out <run>/phase_h.bin "
+            "then set PHASE_H_BIN or ensure it is alongside WEIGHTS_PKL run artifacts."
+        )
+
+    def _archiver_cb(archiver):
+        archiver.with_option_storage()
+        print(f"adding phase_h payload to archive: {phase_h_payload}")
+        archiver.with_ramload_file(
+            file_path=phase_h_payload,
+            psram_dst=0,
+            filename="phase_h.bin",
+        )
+
     top_level_cli(
         CoreTop,
         video_core=False,
         path=this_path,
-        archiver_callback=lambda archiver: archiver.with_option_storage(),
+        archiver_callback=_archiver_cb,
     )

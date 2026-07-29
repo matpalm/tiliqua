@@ -19,7 +19,7 @@ from amaranth_soc import wishbone
 from tiliqua import dsp, midi
 from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
-from tiliqua.build.types import BitstreamHelp
+from tiliqua.build.types import BitstreamHelp, FirmwareLocation
 from tiliqua.dsp import ASQ, block, spectral
 from tiliqua.dsp.mix import CoeffUpdate
 from tiliqua.periph import eurorack_pmod, psram
@@ -54,8 +54,8 @@ def _resolve_phase_h_payload_path(weights_pkl_path: str) -> str | None:
 
 # from amaranth_v.rff_concat_network import RffNetwork, load_weights_and_config
 from amaranth_v.rff_film_network import RffNetwork
-from amaranth_v import NNQ
 from amaranth_v.ramp_v_oct import RampVOct
+
 
 class INRWaveshaper(wiring.Component):
 
@@ -79,7 +79,19 @@ class INRWaveshaper(wiring.Component):
         if not WEIGHTS_PKL or not os.path.exists(WEIGHTS_PKL):
             raise Exception(f"failed to load weights for WEIGHTS_PKL=[{WEIGHTS_PKL}]")
         print(f"loading weights from {WEIGHTS_PKL}")
-        self.net = RffNetwork.build(WEIGHTS_PKL)
+        # The phase->h table is preloaded into PSRAM from phase_h_lut.bin by the
+        # bootloader (RamLoad region registered in the CLI below).
+        # NOTE: base must stay clear of the bootloader framebuffer at PSRAM
+        # offset 0 -- offset 0 is overwritten by the bootloader's video/persist
+        # DMA before this bitstream boots. 0x800000 (8MiB) sits above firmware
+        # and below the end-of-PSRAM bootinfo, with room for the 256KiB table.
+        phase_h_psram_dst = int(os.getenv("PHASE_H_PSRAM_DST", "0x800000"), 0)
+        phase_h_index_bits = int(os.getenv("PHASE_H_INDEX_BITS", "13"), 0)
+        self.net = RffNetwork.build(
+            WEIGHTS_PKL,
+            psram_base=phase_h_psram_dst,
+            index_bits=phase_h_index_bits,
+        )
         super().__init__(
             {
                 "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -97,8 +109,10 @@ class INRWaveshaper(wiring.Component):
         m.submodules.net = net = self.net
         # phase->h table lives in PSRAM; expose the net's wishbone master.
         wiring.connect(m, net.bus_h, wiring.flipped(self.bus_h))
-        # ASQ 1.0 == 8.192V.
-        ramp = RampVOct()
+        # ASQ 1.0 == 8.192V.  RampVOct consumes the ASQ v/oct directly and
+        # emits the phase ramp already in the network's io fixed-point shape, so
+        # no intermediate re-quantisation is needed.
+        ramp = RampVOct(i_shape=ASQ, o_shape=net.io_shape)
         ramp.V_MIN = RampVOct.V_MIN / 8.192
         ramp.V_MAX = RampVOct.V_MAX / 8.192
         ramp.F0_HZ = RampVOct.F0_HZ
@@ -109,33 +123,26 @@ class INRWaveshaper(wiring.Component):
         m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
         # ASQ (audio) and the network's io fixed-point shape differ in scale;
-        # convert by aligning fractional bits (preserving the real value) on the
-        # way in, and saturating back into ASQ on the way out.
+        # non-phase inputs are aligned by fractional bits on the way in, and the
+        # network output is saturated back into ASQ on the way out.
         io_f = net.io_shape.f_bits
         io_i = net.io_shape.i_bits
         IOQ = fixed.SQ(io_i, io_f)  # tiliqua-side view of the network io shape
 
-        # Feed ASQ in0 directly into RampVOct after an f_bits align
-        # (ASQ/NNQ both use signed 16-bit storage, different f_bits).
-        in0_for_ramp = ASQ(self.i.payload[0].as_value()).reshape(NNQ.f_bits)
+        # Feed ASQ in0 straight into RampVOct; its phase ramp comes out already
+        # in the network io shape.
         m.d.comb += [
-            ramp.i.payload.eq(in0_for_ramp),
+            ramp.i.payload.eq(self.i.payload[0]),
             ramp.i.valid.eq(self.i.valid),
             ramp.o.ready.eq(net.i.ready),
         ]
-
-        phase_for_net = NNQ(ramp.o.payload.as_value())
 
         # map tiliqua inputs to network as required
         print("net in_d", self.net.in_d, "out_d", self.net.out_d)
 
         for ch in range(self.net.in_d):
             if ch == 0:
-                m.d.comb += (
-                    net.i.payload[ch]
-                    .as_value()
-                    .eq(phase_for_net.reshape(io_f).as_value())
-                )
+                m.d.comb += net.i.payload[ch].as_value().eq(ramp.o.payload.as_value())
             else:
                 m.d.comb += (
                     net.i.payload[ch]
@@ -148,12 +155,14 @@ class INRWaveshaper(wiring.Component):
         o_io = IOQ(net.o.payload[0].as_value())
 
         # mirror the phase ramp on out3 at +/-5V in ASQ units.
-        # phase_for_net is +/-0.5; scale by (5/8.192)/0.5 = 625/512
-        ramp_code = Signal(signed(NNQ.width))
-        ramp_scaled_num = Signal(signed(NNQ.width + 10))
+        # ramp phase is +/-0.5 in the io shape; scale by (5/8.192)/0.5 = 625/512
+        # then correct for the io/ASQ fractional-bit difference:
+        #   ASQ_code = phase_code * 625 >> (9 + io_f - ASQ.f_bits)
+        ramp_code = Signal(signed(net.io_shape.width))
+        ramp_scaled_num = Signal(signed(net.io_shape.width + 10))
         ramp_asq_code = Signal(signed(ASQ.width))
         m.d.comb += [
-            ramp_code.eq(phase_for_net.as_value()),
+            ramp_code.eq(ramp.o.payload.as_value()),
             ramp_scaled_num.eq(
                 (ramp_code << 9)
                 + (ramp_code << 6)
@@ -161,7 +170,7 @@ class INRWaveshaper(wiring.Component):
                 + (ramp_code << 4)
                 + ramp_code
             ),
-            ramp_asq_code.eq(ramp_scaled_num >> 6),
+            ramp_asq_code.eq(ramp_scaled_num >> (9 + io_f - ASQ.f_bits)),
         ]
         m.d.comb += [
             post_lpf.i.payload.eq(o_io.saturate(ASQ)),
@@ -239,30 +248,32 @@ class CoreTop(Elaboratable):
 
 if __name__ == "__main__":
     this_path = os.path.dirname(os.path.realpath(__file__))
-    weights_pkl = os.getenv("WEIGHTS_PKL")
-    phase_h_payload = (
-        _resolve_phase_h_payload_path(weights_pkl) if weights_pkl else None
-    )
-    if not phase_h_payload:
-        raise FileNotFoundError(
-            "phase_h.bin payload is required for preload-only PhaseHLutPS. "
-            "Generate it with: "
-            "uv run -m qkeras_v.export_phase_h_table --weights-pkl <...>/latest.pkl --out <run>/phase_h.bin "
-            "then set PHASE_H_BIN or ensure it is alongside WEIGHTS_PKL run artifacts."
-        )
 
-    def _archiver_cb(archiver):
-        archiver.with_option_storage()
-        print(f"adding phase_h payload to archive: {phase_h_payload}")
-        archiver.with_ramload_file(
-            file_path=phase_h_payload,
-            psram_dst=0,
-            filename="phase_h.bin",
+    def _archiver_callback(archiver):
+        # Bundle phase_h_lut.bin so the bootloader copies it SPIFlash->PSRAM at
+        # PHASE_H_PSRAM_DST before this bitstream starts; PhaseHLutPS then reads
+        # it directly (preloaded mode) instead of rebuilding the table on-device.
+        phase_h_bin = os.getenv("PHASE_H_BIN")
+        if not phase_h_bin:
+            raise RuntimeError(
+                "PHASE_H_BIN must point to phase_h_lut.bin so it can be bundled "
+                "as a RamLoad region"
+            )
+        phase_h_bin = os.path.abspath(os.path.expanduser(phase_h_bin))
+        if not os.path.exists(phase_h_bin):
+            raise FileNotFoundError(f"PHASE_H_BIN not found: {phase_h_bin}")
+
+        phase_h_psram_dst = int(os.getenv("PHASE_H_PSRAM_DST", "0x800000"), 0)
+        archiver.with_firmware(
+            firmware_bin_path=phase_h_bin,
+            fw_location=FirmwareLocation.PSRAM,
+            fw_offset=phase_h_psram_dst,
         )
+        return archiver.with_option_storage()
 
     top_level_cli(
         CoreTop,
         video_core=False,
         path=this_path,
-        archiver_callback=_archiver_cb,
+        archiver_callback=_archiver_callback,
     )

@@ -231,11 +231,11 @@ class ArchiveBuilder:
         with tarfile.open(self.archive_path, "w:gz") as tar:
             tar.add(self.bitstream_path, arcname="top.bit")
             tar.add(self.manifest_path, arcname="manifest.json")
-            for filename, src_path in self._resource_paths.items():
-                if os.path.exists(src_path):
-                    tar.add(src_path, arcname=filename)
-                else:
-                    print(f"WARNING: Skipping missing archive payload '{src_path}'")
+            if self._firmware_bin_path and os.path.exists(self._firmware_bin_path):
+                tar.add(
+                    self._firmware_bin_path,
+                    arcname=os.path.basename(self._firmware_bin_path),
+                )
 
         self._print_archive_info()
         print(f"\nSaved to '{self.build_path}/{self.archive_name}'")

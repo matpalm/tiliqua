@@ -18,7 +18,7 @@ from amaranth_soc import wishbone
 from tiliqua import dsp, midi
 from tiliqua.build import sim
 from tiliqua.build.cli import top_level_cli
-from tiliqua.build.types import BitstreamHelp
+from tiliqua.build.types import BitstreamHelp, FirmwareLocation
 from tiliqua.dsp import ASQ, block, spectral
 from tiliqua.dsp.mix import CoeffUpdate
 from tiliqua.periph import eurorack_pmod, psram
@@ -57,7 +57,19 @@ class INRWaveshaper(wiring.Component):
         if not WEIGHTS_PKL or not os.path.exists(WEIGHTS_PKL):
             raise Exception(f"failed to load weights for WEIGHTS_PKL=[{WEIGHTS_PKL}]")
         print(f"loading weights from {WEIGHTS_PKL}")
-        self.net = RffNetwork.build(WEIGHTS_PKL)
+        # The phase->h table is preloaded into PSRAM from phase_h_lut.bin by the
+        # bootloader (RamLoad region registered in the CLI below).
+        # NOTE: base must stay clear of the bootloader framebuffer at PSRAM
+        # offset 0 -- offset 0 is overwritten by the bootloader's video/persist
+        # DMA before this bitstream boots. 0x800000 (8MiB) sits above firmware
+        # and below the end-of-PSRAM bootinfo, with room for the 256KiB table.
+        phase_h_psram_dst = int(os.getenv("PHASE_H_PSRAM_DST", "0x800000"), 0)
+        phase_h_index_bits = int(os.getenv("PHASE_H_INDEX_BITS", "13"), 0)
+        self.net = RffNetwork.build(
+            WEIGHTS_PKL,
+            psram_base=phase_h_psram_dst,
+            index_bits=phase_h_index_bits,
+        )
         super().__init__(
             {
                 "i": In(stream.Signature(data.ArrayLayout(ASQ, 4))),
@@ -217,9 +229,32 @@ class CoreTop(Elaboratable):
 
 if __name__ == "__main__":
     this_path = os.path.dirname(os.path.realpath(__file__))
+
+    def _archiver_callback(archiver):
+        # Bundle phase_h_lut.bin so the bootloader copies it SPIFlash->PSRAM at
+        # PHASE_H_PSRAM_DST before this bitstream starts; PhaseHLutPS then reads
+        # it directly (preloaded mode) instead of rebuilding the table on-device.
+        phase_h_bin = os.getenv("PHASE_H_BIN")
+        if not phase_h_bin:
+            raise RuntimeError(
+                "PHASE_H_BIN must point to phase_h_lut.bin so it can be bundled "
+                "as a RamLoad region"
+            )
+        phase_h_bin = os.path.abspath(os.path.expanduser(phase_h_bin))
+        if not os.path.exists(phase_h_bin):
+            raise FileNotFoundError(f"PHASE_H_BIN not found: {phase_h_bin}")
+
+        phase_h_psram_dst = int(os.getenv("PHASE_H_PSRAM_DST", "0x800000"), 0)
+        archiver.with_firmware(
+            firmware_bin_path=phase_h_bin,
+            fw_location=FirmwareLocation.PSRAM,
+            fw_offset=phase_h_psram_dst,
+        )
+        return archiver.with_option_storage()
+
     top_level_cli(
         CoreTop,
         video_core=False,
         path=this_path,
-        archiver_callback=lambda archiver: archiver.with_option_storage(),
+        archiver_callback=_archiver_callback,
     )

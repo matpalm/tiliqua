@@ -197,7 +197,10 @@ class ArchiveBuilder:
             tar.add(self.bitstream_path, arcname="top.bit")
             tar.add(self.manifest_path, arcname="manifest.json")
             if self._firmware_bin_path and os.path.exists(self._firmware_bin_path):
-                tar.add(self._firmware_bin_path, arcname="firmware.bin")
+                tar.add(
+                    self._firmware_bin_path,
+                    arcname=os.path.basename(self._firmware_bin_path),
+                )
 
         self._print_archive_info()
         print(f"\nSaved to '{self.build_path}/{self.archive_name}'")

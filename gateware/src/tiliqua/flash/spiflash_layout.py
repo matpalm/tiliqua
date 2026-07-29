@@ -130,9 +130,26 @@ def compute_concrete_regions_to_flash(
     layout = SlotLayout(slot)
     regions_to_flash = []
 
+    def _align_up(value: int, align: int) -> int:
+        return (value + align - 1) & ~(align - 1)
+
     ramload_base = None
     if not layout.is_bootloader:
-        ramload_base = layout.firmware_base
+        # Place RamLoad payloads immediately after the bitstream to maximize
+        # available room within the slot (before fixed option/manifest sectors).
+        # Older fixed-offset packing left a hole and could report overlaps for
+        # larger payloads that would otherwise fit.
+        bitstream_region = next(
+            (r for r in manifest.regions if r.region_type == RegionType.Bitstream),
+            None,
+        )
+        if bitstream_region is not None:
+            ramload_base = _align_up(
+                layout.bitstream_addr + bitstream_region.size, FLASH_SECTOR_SZ
+            )
+        else:
+            # Fallback for malformed manifests: retain legacy base behavior.
+            ramload_base = layout.firmware_base
 
     # Update all regions with real SPIflash addresses, where needed.
     for region in manifest.regions:
@@ -163,8 +180,10 @@ def compute_concrete_regions_to_flash(
     # For non-XIP firmware, check if any region exceeds its slot
     for region in regions_to_flash:
         if region.end_addr > layout.slot_end_addr:
-            raise ValueError(f"Region {region.name} exceeds slot boundary: "
-                             f"ends at 0x{region.end_addr:x}, slot ends at 0x{layout.slot_end_addr:x}")
+            raise ValueError(
+                f"Region {region.memory_region.filename} exceeds slot boundary: "
+                f"ends at 0x{region.end_addr:x}, slot ends at 0x{layout.slot_end_addr:x}"
+            )
 
     # Sort by start address and check for overlaps
     sorted_regions = sorted(regions_to_flash)
@@ -172,7 +191,9 @@ def compute_concrete_regions_to_flash(
         curr_end = sorted_regions[i].end_addr
         next_start = sorted_regions[i + 1].addr
         if curr_end > next_start:
-            raise ValueError(f"Overlap detected between {sorted_regions[i].name} (ends at 0x{curr_end:x}) "
-                             f"and {sorted_regions[i+1].name} (starts at 0x{next_start:x})")
+            raise ValueError(
+                f"Overlap detected between {sorted_regions[i].memory_region.filename} (ends at 0x{curr_end:x}) "
+                f"and {sorted_regions[i+1].memory_region.filename} (starts at 0x{next_start:x})"
+            )
 
     return (manifest, regions_to_flash)

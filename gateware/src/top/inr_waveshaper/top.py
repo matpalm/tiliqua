@@ -32,7 +32,6 @@ sys.path.insert(0, INR_ROOT)
 
 # from amaranth_v.rff_concat_network import RffNetwork, load_weights_and_config
 from amaranth_v.rff_film_network import RffNetwork
-from amaranth_v import NNQ
 from amaranth_v.ramp_v_oct import RampVOct
 
 class INRWaveshaper(wiring.Component):
@@ -87,8 +86,10 @@ class INRWaveshaper(wiring.Component):
         m.submodules.net = net = self.net
         # phase->h table lives in PSRAM; expose the net's wishbone master.
         wiring.connect(m, net.bus_h, wiring.flipped(self.bus_h))
-        # ASQ 1.0 == 8.192V.
-        ramp = RampVOct()
+        # ASQ 1.0 == 8.192V.  RampVOct consumes the ASQ v/oct directly and
+        # emits the phase ramp already in the network's io fixed-point shape, so
+        # no intermediate re-quantisation is needed.
+        ramp = RampVOct(i_shape=ASQ, o_shape=net.io_shape)
         ramp.V_MIN = RampVOct.V_MIN / 8.192
         ramp.V_MAX = RampVOct.V_MAX / 8.192
         ramp.F0_HZ = RampVOct.F0_HZ
@@ -99,33 +100,26 @@ class INRWaveshaper(wiring.Component):
         m.submodules.post_lpf = post_lpf = dsp.OnePole()
 
         # ASQ (audio) and the network's io fixed-point shape differ in scale;
-        # convert by aligning fractional bits (preserving the real value) on the
-        # way in, and saturating back into ASQ on the way out.
+        # non-phase inputs are aligned by fractional bits on the way in, and the
+        # network output is saturated back into ASQ on the way out.
         io_f = net.io_shape.f_bits
         io_i = net.io_shape.i_bits
         IOQ = fixed.SQ(io_i, io_f)  # tiliqua-side view of the network io shape
 
-        # Feed ASQ in0 directly into RampVOct after an f_bits align
-        # (ASQ/NNQ both use signed 16-bit storage, different f_bits).
-        in0_for_ramp = ASQ(self.i.payload[0].as_value()).reshape(NNQ.f_bits)
+        # Feed ASQ in0 straight into RampVOct; its phase ramp comes out already
+        # in the network io shape.
         m.d.comb += [
-            ramp.i.payload.eq(in0_for_ramp),
+            ramp.i.payload.eq(self.i.payload[0]),
             ramp.i.valid.eq(self.i.valid),
             ramp.o.ready.eq(net.i.ready),
         ]
-
-        phase_for_net = NNQ(ramp.o.payload.as_value())
 
         # map tiliqua inputs to network as required
         print("net in_d", self.net.in_d, "out_d", self.net.out_d)
 
         for ch in range(self.net.in_d):
             if ch == 0:
-                m.d.comb += (
-                    net.i.payload[ch]
-                    .as_value()
-                    .eq(phase_for_net.reshape(io_f).as_value())
-                )
+                m.d.comb += net.i.payload[ch].as_value().eq(ramp.o.payload.as_value())
             else:
                 m.d.comb += (
                     net.i.payload[ch]
@@ -138,12 +132,14 @@ class INRWaveshaper(wiring.Component):
         o_io = IOQ(net.o.payload[0].as_value())
 
         # mirror the phase ramp on out3 at +/-5V in ASQ units.
-        # phase_for_net is +/-0.5; scale by (5/8.192)/0.5 = 625/512
-        ramp_code = Signal(signed(NNQ.width))
-        ramp_scaled_num = Signal(signed(NNQ.width + 10))
+        # ramp phase is +/-0.5 in the io shape; scale by (5/8.192)/0.5 = 625/512
+        # then correct for the io/ASQ fractional-bit difference:
+        #   ASQ_code = phase_code * 625 >> (9 + io_f - ASQ.f_bits)
+        ramp_code = Signal(signed(net.io_shape.width))
+        ramp_scaled_num = Signal(signed(net.io_shape.width + 10))
         ramp_asq_code = Signal(signed(ASQ.width))
         m.d.comb += [
-            ramp_code.eq(phase_for_net.as_value()),
+            ramp_code.eq(ramp.o.payload.as_value()),
             ramp_scaled_num.eq(
                 (ramp_code << 9)
                 + (ramp_code << 6)
@@ -151,7 +147,7 @@ class INRWaveshaper(wiring.Component):
                 + (ramp_code << 4)
                 + ramp_code
             ),
-            ramp_asq_code.eq(ramp_scaled_num >> 6),
+            ramp_asq_code.eq(ramp_scaled_num >> (9 + io_f - ASQ.f_bits)),
         ]
         m.d.comb += [
             post_lpf.i.payload.eq(o_io.saturate(ASQ)),

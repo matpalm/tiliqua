@@ -31,6 +31,11 @@ import os
 INR_ROOT = "/home/mat/dev/inr_waveshaper/"
 sys.path.insert(0, INR_ROOT)
 
+# if true we init a simple RampVOct control that takes in0 ( as v/oct ) and generates the ramp wave to feed as phase
+# if false we just take in0 directly as the ramp to feed as phase
+# in both cases feed the value to out3
+VOCT_IN = os.getenv("VOCT_IN", "true").strip().lower() == "true"
+
 
 def _resolve_phase_h_payload_path(weights_pkl_path: str) -> str | None:
     """Find phase_h payload generated from qkeras run artifacts."""
@@ -109,19 +114,6 @@ class INRWaveshaper(wiring.Component):
         m.submodules.net = net = self.net
         # phase->h table lives in PSRAM; expose the net's wishbone master.
         wiring.connect(m, net.bus_h, wiring.flipped(self.bus_h))
-        # ASQ 1.0 == 8.192V.  RampVOct consumes the ASQ v/oct directly and
-        # emits the phase ramp already in the network's io fixed-point shape, so
-        # no intermediate re-quantisation is needed.
-        ramp = RampVOct(i_shape=ASQ, o_shape=net.io_shape)
-        ramp.V_MIN = RampVOct.V_MIN / 8.192
-        ramp.V_MAX = RampVOct.V_MAX / 8.192
-        ramp.F0_HZ = RampVOct.F0_HZ
-        ramp.OCTAVES = RampVOct.OCTAVES
-        ramp.RAMP_V = 0.5  # training data is +- 0.5
-        m.submodules.ramp = ramp
-
-        m.submodules.post_lpf = post_lpf = dsp.OnePole()
-
         # ASQ (audio) and the network's io fixed-point shape differ in scale;
         # non-phase inputs are aligned by fractional bits on the way in, and the
         # network output is saturated back into ASQ on the way out.
@@ -129,55 +121,99 @@ class INRWaveshaper(wiring.Component):
         io_i = net.io_shape.i_bits
         IOQ = fixed.SQ(io_i, io_f)  # tiliqua-side view of the network io shape
 
-        # Feed ASQ in0 straight into RampVOct; its phase ramp comes out already
-        # in the network io shape.
-        m.d.comb += [
-            ramp.i.payload.eq(self.i.payload[0]),
-            ramp.i.valid.eq(self.i.valid),
-            ramp.o.ready.eq(net.i.ready),
-        ]
+        print("VOCT_IN", VOCT_IN)
+
+        if VOCT_IN:
+            # ASQ 1.0 == 8.192V.  RampVOct consumes the ASQ v/oct directly and
+            # emits the phase ramp already in the network's io fixed-point shape, so
+            # no intermediate re-quantisation is needed.
+            ramp = RampVOct(i_shape=ASQ, o_shape=net.io_shape)
+            ramp.V_MIN = RampVOct.V_MIN / 8.192
+            ramp.V_MAX = RampVOct.V_MAX / 8.192
+            ramp.F0_HZ = RampVOct.F0_HZ
+            ramp.OCTAVES = RampVOct.OCTAVES
+            ramp.RAMP_V = 0.5  # training data is +- 0.5
+            m.submodules.ramp = ramp
+            m.d.comb += [
+                ramp.i.payload.eq(self.i.payload[0]),
+                ramp.i.valid.eq(self.i.valid),
+                ramp.o.ready.eq(net.i.ready),
+            ]
+
+        m.submodules.post_lpf = post_lpf = dsp.OnePole()
+
+        if not VOCT_IN:
+            # Register-slice the direct phase/input stream path to break long
+            # combinational ready/payload routes into the network.
+            in_buf_valid = Signal(reset=0)
+            in_buf_payload = [
+                Signal(signed(net.io_shape.width), name=f"in_buf_payload_{ch}")
+                for ch in range(self.net.in_d)
+            ]
+
+            m.d.comb += [
+                self.i.ready.eq((~in_buf_valid) | net.i.ready),
+                net.i.valid.eq(in_buf_valid),
+            ]
+            for ch in range(self.net.in_d):
+                m.d.comb += net.i.payload[ch].as_value().eq(in_buf_payload[ch])
+
+            with m.If(self.i.ready):
+                m.d.sync += in_buf_valid.eq(self.i.valid)
+                with m.If(self.i.valid):
+                    for ch in range(self.net.in_d):
+                        m.d.sync += in_buf_payload[ch].eq(
+                            self.i.payload[ch].reshape(io_f).as_value()
+                        )
 
         # map tiliqua inputs to network as required
         print("net in_d", self.net.in_d, "out_d", self.net.out_d)
 
-        for ch in range(self.net.in_d):
-            if ch == 0:
-                m.d.comb += net.i.payload[ch].as_value().eq(ramp.o.payload.as_value())
-            else:
-                m.d.comb += (
-                    net.i.payload[ch]
-                    .as_value()
-                    .eq(self.i.payload[ch].reshape(io_f).as_value())
-                )
+        if VOCT_IN:
+            for ch in range(self.net.in_d):
+                if ch == 0:
+                    m.d.comb += (
+                        net.i.payload[ch].as_value().eq(ramp.o.payload.as_value())
+                    )
+                else:
+                    m.d.comb += (
+                        net.i.payload[ch]
+                        .as_value()
+                        .eq(self.i.payload[ch].reshape(io_f).as_value())
+                    )
 
         # set waveshaped output net out0 -> tiliqua out0 ( as ASQ )
         # set lowpassed version on out1 ( delayed one cycle )
         o_io = IOQ(net.o.payload[0].as_value())
 
-        # mirror the phase ramp on out3 at +/-5V in ASQ units.
-        # ramp phase is +/-0.5 in the io shape; scale by (5/8.192)/0.5 = 625/512
-        # then correct for the io/ASQ fractional-bit difference:
-        #   ASQ_code = phase_code * 625 >> (9 + io_f - ASQ.f_bits)
-        ramp_code = Signal(signed(net.io_shape.width))
-        ramp_scaled_num = Signal(signed(net.io_shape.width + 10))
-        ramp_asq_code = Signal(signed(ASQ.width))
-        m.d.comb += [
-            ramp_code.eq(ramp.o.payload.as_value()),
-            ramp_scaled_num.eq(
-                (ramp_code << 9)
-                + (ramp_code << 6)
-                + (ramp_code << 5)
-                + (ramp_code << 4)
-                + ramp_code
-            ),
-            ramp_asq_code.eq(ramp_scaled_num >> (9 + io_f - ASQ.f_bits)),
-        ]
         m.d.comb += [
             post_lpf.i.payload.eq(o_io.saturate(ASQ)),
             post_lpf.shift.eq(1),
             self.o.payload[2].eq(0),
-            self.o.payload[3].as_value().eq(ramp_asq_code),
         ]
+        if VOCT_IN:
+            # mirror the phase ramp on out3 at +/-5V in ASQ units.
+            # ramp phase is +/-0.5 in the io shape; scale by (5/8.192)/0.5 = 625/512
+            # then correct for the io/ASQ fractional-bit difference:
+            #   ASQ_code = phase_code * 625 >> (9 + io_f - ASQ.f_bits)
+            ramp_code = Signal(signed(net.io_shape.width))
+            ramp_scaled_num = Signal(signed(net.io_shape.width + 10))
+            ramp_asq_code = Signal(signed(ASQ.width))
+            m.d.comb += [
+                ramp_code.eq(ramp.o.payload.as_value()),
+                ramp_scaled_num.eq(
+                    (ramp_code << 9)
+                    + (ramp_code << 6)
+                    + (ramp_code << 5)
+                    + (ramp_code << 4)
+                    + ramp_code
+                ),
+                ramp_asq_code.eq(ramp_scaled_num >> (9 + io_f - ASQ.f_bits)),
+            ]
+            m.d.comb += self.o.payload[3].as_value().eq(ramp_asq_code)
+        else:
+            # in0 is already the phase ramp in ASQ; pass it straight to out3
+            m.d.comb += self.o.payload[3].eq(self.i.payload[0])
         # mute the waveshaped outputs until the startup phase->h build completes.
         with m.If(net.ready):
             m.d.comb += [
@@ -186,9 +222,13 @@ class INRWaveshaper(wiring.Component):
             ]
 
         # stream handshake: one audio frame in -> one network eval -> one out.
+        if VOCT_IN:
+            m.d.comb += [
+                net.i.valid.eq(ramp.o.valid),
+                self.i.ready.eq(ramp.i.ready),
+            ]
+
         m.d.comb += [
-            net.i.valid.eq(ramp.o.valid),
-            self.i.ready.eq(ramp.i.ready),
             post_lpf.i.valid.eq(net.o.valid),
             post_lpf.o.ready.eq(self.o.ready),
             net.o.ready.eq(self.o.ready),

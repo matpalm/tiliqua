@@ -86,6 +86,8 @@ class Persistance(wiring.Component):
         m.d.sync += lfsr1.eq(lfsr1_next)
         m.d.sync += lfsr0.eq(lfsr0 ^ lfsr1_next)
 
+        lfsr_beat = Signal(unsigned(32))
+
         m.d.comb += self.fifo.w_data.eq(bus.dat_r)
 
         # Used for fastpath when all pixels are zero
@@ -126,7 +128,8 @@ class Persistance(wiring.Component):
                 with m.If(self.fifo.w_level == (self.fifo_depth-1)):
                     m.d.comb += bus.cti.eq(
                             wishbone.CycleType.END_OF_BURST)
-                    m.next = 'PREFETCH'
+                    with m.If(bus.ack):
+                        m.next = 'PREFETCH'
 
             with m.State('PREFETCH'):
                 # Do not permit bus arbitration between burst in and out.
@@ -138,6 +141,7 @@ class Persistance(wiring.Component):
                         # Prefetch first FIFO entry before burst
                         m.d.comb += self.fifo.r_en.eq(1)
                         m.d.sync += pixels_r.eq(self.fifo.r_data)
+                        m.d.sync += lfsr_beat.eq(lfsr1)
                         m.next = 'BURST-OUT'
                     with m.Else():
                         # Fastpath: all pixels have zero intensity -
@@ -153,7 +157,7 @@ class Persistance(wiring.Component):
                 pixels_w = Signal(data.ArrayLayout(Pixel, 4))
                 for n in range(4):
                     skip_this = Signal(name=f"skip_{n}")
-                    m.d.comb += skip_this.eq(lfsr1[n*8:(n*8)+8] < skip_latch)
+                    m.d.comb += skip_this.eq(lfsr_beat[n*8:(n*8)+8] < skip_latch)
                     m.d.comb += pixels_w[n].color.eq(pixels_r[n].color)
                     with m.If(skip_this):
                         m.d.comb += pixels_w[n].intensity.eq(pixels_r[n].intensity)
@@ -175,10 +179,12 @@ class Persistance(wiring.Component):
                 with m.If(bus.ack):
                     m.d.comb += self.fifo.r_en.eq(1)
                     m.d.sync += pixels_r.eq(self.fifo.r_data)
+                    m.d.sync += lfsr_beat.eq(lfsr1)
                 with m.If(~self.fifo.r_rdy):
                     m.d.comb += bus.cti.eq(
                             wishbone.CycleType.END_OF_BURST)
-                    m.next = 'HOLDOFF'
+                    with m.If(bus.ack):
+                        m.next = 'HOLDOFF'
 
             with m.State('DRAIN'):
                 m.d.comb += self.fifo.r_en.eq(1)

@@ -124,15 +124,29 @@ def top_level_cli(
                         help="amaranth: emit debug verilog")
     parser.add_argument('--noflatten', action='store_true',
                         help="yosys: don't flatten heirarchy (useful for checking area usage).")
+    parser.add_argument(
+        "--nextpnr-seed",
+        type=int,
+        default=None,
+        help="nextpnr: set a fixed seed for reproducible place-and-route behavior.",
+    )
     if ila_supported:
-        parser.add_argument('--ila', action='store_true',
-                            help="debug: add ila to design, program bitstream after build, poll UART for data.")
-        parser.add_argument('--ila-port', type=str, default="/dev/ttyACM0",
-                            help="debug: serial port on host that ila is connected to")
+        parser.add_argument(
+            "--ila",
+            action="store_true",
+            help="debug: add ila to design, program bitstream after build, poll UART for data.",
+        )
+        parser.add_argument(
+            "--ila-port",
+            type=str,
+            default="/dev/ttyACM0",
+            help="debug: serial port on host that ila is connected to",
+        )
 
     sim_action = [CliAction.Simulate.value] if simulation_supported else []
-    parser.add_argument("action", type=CliAction,
-                        choices=[CliAction.Build.value] + sim_action)
+    parser.add_argument(
+        "action", type=CliAction, choices=[CliAction.Build.value] + sim_action
+    )
 
     if argparse_callback:
         argparse_callback(parser)
@@ -149,53 +163,67 @@ def top_level_cli(
 
     audio_clock = platform_class.default_audio_clock
     if video_core:
-        if (args.modeline is None and issubclass(fragment, TiliquaSoc) and
-            platform_class.clock_domain_generator == pll.TiliquaDomainGeneratorPLLExternal):
+        if (
+            args.modeline is None
+            and issubclass(fragment, TiliquaSoc)
+            and platform_class.clock_domain_generator
+            == pll.TiliquaDomainGeneratorPLLExternal
+        ):
             # If this configuration supports dynamic modelines and no modeline was set, use dynamic video mode.
             kwargs["clock_settings"] = pll.ClockSettings(
                 audio_clock.to_192khz() if args.fs_192khz else audio_clock,
                 dynamic_modeline=True,
-                modeline=None)
+                modeline=None,
+            )
         else:
             # Use static video mode
             if args.modeline is None:
                 # Default modeline (if no static modeline was set and dynamic modelines unsupported)
                 args.modeline = "1280x720p60"
             modelines = modeline.DVIModeline.all_timings()
-            assert args.modeline in modelines, f"error: fixed `--modeline` must be one of {modelines.keys()}"
+            assert (
+                args.modeline in modelines
+            ), f"error: fixed `--modeline` must be one of {modelines.keys()}"
             kwargs["clock_settings"] = pll.ClockSettings(
                 audio_clock.to_192khz() if args.fs_192khz else audio_clock,
                 dynamic_modeline=False,
-                modeline=modelines[args.modeline])
+                modeline=modelines[args.modeline],
+            )
     else:
         kwargs["clock_settings"] = pll.ClockSettings(
             audio_clock.to_192khz() if args.fs_192khz else audio_clock,
             dynamic_modeline=False,
-            modeline=None)
+            modeline=None,
+        )
 
-    build_path = os.path.abspath(os.path.join(
-        "build", f"{args.name.lower()}-{args.hw.value}"))
+    build_path = os.path.abspath(
+        os.path.join("build", f"{args.name.lower()}-{args.hw.value}")
+    )
     if not os.path.exists(build_path):
         os.makedirs(build_path)
 
     if issubclass(fragment, TiliquaSoc):
-        rust_fw_bin  = "firmware.bin"
+        rust_fw_bin = "firmware.bin"
         kwargs["firmware_bin_path"] = os.path.join(build_path, rust_fw_bin)
         kwargs["fw_location"] = args.fw_location
         if args.fw_offset is None:
             match args.fw_location:
                 case FirmwareLocation.SPIFlash:
-                    kwargs["fw_offset"] = 0xb0000
-                    print("WARN: firmware loads from SPI flash, but no `--fw-offset` specified. "
-                          f"using default: {hex(kwargs['fw_offset'])}")
+                    kwargs["fw_offset"] = 0xB0000
+                    print(
+                        "WARN: firmware loads from SPI flash, but no `--fw-offset` specified. "
+                        f"using default: {hex(kwargs['fw_offset'])}"
+                    )
                 case FirmwareLocation.PSRAM:
                     kwargs["fw_offset"] = 0x200000
-                    print("WARN: firmware loads from PSRAM, but no `--fw-offset` specified. "
-                          f"using default: {hex(kwargs['fw_offset'])}")
+                    print(
+                        "WARN: firmware loads from PSRAM, but no `--fw-offset` specified. "
+                        f"using default: {hex(kwargs['fw_offset'])}"
+                    )
         else:
             kwargs["fw_offset"] = int(args.fw_offset, 16)
         kwargs["ui_name"] = args.name
-        kwargs["ui_tag"]  = repo_tag
+        kwargs["ui_tag"] = repo_tag
         kwargs["platform_class"] = platform_class
 
     assert callable(fragment)
@@ -218,14 +246,18 @@ def top_level_cli(
     if hasattr(fragment, "bitstream_help"):
         bitstream_help = fragment.bitstream_help
     if video_core:
-        bitstream_help.video = "<match-bootloader>" if kwargs["clock_settings"].dynamic_modeline else args.modeline
+        bitstream_help.video = (
+            "<match-bootloader>"
+            if kwargs["clock_settings"].dynamic_modeline
+            else args.modeline
+        )
 
     archiver = ArchiveBuilder(
         build_path=build_path,
         name=args.name,
         tag=repo_tag,
         hw_rev=args.hw,
-        bitstream_help=bitstream_help
+        bitstream_help=bitstream_help,
     )
 
     if hw_platform.clock_domain_generator == pll.TiliquaDomainGeneratorPLLExternal:
@@ -233,10 +265,15 @@ def top_level_cli(
             clk0_hz=kwargs["clock_settings"].frequencies.audio,
             clk1_hz=kwargs["clock_settings"].frequencies.dvi,
             clk1_inherit=kwargs["clock_settings"].dynamic_modeline,
-            spread_spectrum=0.01)
+            spread_spectrum=0.01,
+        )
         # Ensure PnR/LPF constraints match the external PLL settings above
-        hw_platform.resources[('clkex', 0)].clock.frequency = archiver.external_pll_config.clk0_hz
-        hw_platform.resources[('clkex', 1)].clock.frequency = archiver.external_pll_config.clk1_hz
+        hw_platform.resources[("clkex", 0)].clock.frequency = (
+            archiver.external_pll_config.clk0_hz
+        )
+        hw_platform.resources[("clkex", 1)].clock.frequency = (
+            archiver.external_pll_config.clk1_hz
+        )
 
     if isinstance(fragment, TiliquaSoc):
         # Generate SVD
@@ -261,7 +298,7 @@ def top_level_cli(
         archiver.with_firmware(
             firmware_bin_path=kwargs["firmware_bin_path"],
             fw_location=args.fw_location,
-            fw_offset=kwargs["fw_offset"]
+            fw_offset=kwargs["fw_offset"],
         )
 
     # Allow project to customize the archiver, adding any extra data
@@ -283,10 +320,16 @@ def top_level_cli(
             sim_ports = sim.soc_simulation_ports
             sim_harness = "src/tb_cpp/sim_soc.cpp"
 
-
     if args.action == CliAction.Simulate:
-        sim.simulate(fragment, sim_ports(fragment), sim_harness,
-                     hw_platform, kwargs["clock_settings"], args.trace_fst, archiver)
+        sim.simulate(
+            fragment,
+            sim_ports(fragment),
+            sim_harness,
+            hw_platform,
+            kwargs["clock_settings"],
+            args.trace_fst,
+            archiver,
+        )
         sys.exit(0)
 
     if ila_supported and args.ila:
@@ -296,12 +339,16 @@ def top_level_cli(
 
     if args.action == CliAction.Build:
 
+        nextpnr_opts = "--timing-allow-fail"
+        if args.nextpnr_seed is not None:
+            nextpnr_opts = f"{nextpnr_opts} --seed {args.nextpnr_seed}"
+
         build_flags = {
             "build_dir": build_path,
             "verbose": args.verbose,
             "debug_verilog": args.debug_verilog,
-            "nextpnr_opts": "--timing-allow-fail",
-            "ecppack_opts": f"--freq 38.8 --compress --bootaddr {args.bootaddr}"
+            "nextpnr_opts": nextpnr_opts,
+            "ecppack_opts": f"--freq 38.8 --compress --bootaddr {args.bootaddr}",
         }
 
         # workaround for https://github.com/YosysHQ/yosys/issues/4451

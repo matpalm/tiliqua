@@ -134,6 +134,7 @@ def compute_concrete_regions_to_flash(
         return (value + align - 1) & ~(align - 1)
 
     ramload_base = None
+    ramload_slot = None
     if not layout.is_bootloader:
         # Place RamLoad payloads immediately after the bitstream to maximize
         # available room within the slot (before fixed option/manifest sectors).
@@ -147,9 +148,11 @@ def compute_concrete_regions_to_flash(
             ramload_base = _align_up(
                 layout.bitstream_addr + bitstream_region.size, FLASH_SECTOR_SZ
             )
+            ramload_slot = slot
         else:
             # Fallback for malformed manifests: retain legacy base behavior.
             ramload_base = layout.firmware_base
+            ramload_slot = slot
 
     # Update all regions with real SPIflash addresses, where needed.
     for region in manifest.regions:
@@ -165,6 +168,23 @@ def compute_concrete_regions_to_flash(
                 region.spiflash_src = layout.options_base
             case RegionType.RamLoad:
                 assert region.spiflash_src is None, "RamLoad region already has spiflash_src set"
+
+                if not layout.is_bootloader:
+                    # If the current slot cannot accommodate the next payload,
+                    # spill to subsequent slot(s). This keeps boundary checks
+                    # strict while allowing large payloads to consume extra slots.
+                    needed = _align_up(region.size, FLASH_SECTOR_SZ)
+                    while ramload_base + needed > (
+                        SLOT_BITSTREAM_BASE + ((ramload_slot + 1) * SLOT_SIZE)
+                    ):
+                        ramload_slot += 1
+                        if ramload_slot >= N_MANIFESTS:
+                            raise ValueError(
+                                f"Region {region.filename} does not fit in available user slots "
+                                f"starting from slot {slot}"
+                            )
+                        ramload_base = SlotLayout(ramload_slot).bitstream_addr
+
                 region.spiflash_src = ramload_base
                 # Align firmware base to next flash sector boundary
                 ramload_base += region.size
@@ -177,12 +197,27 @@ def compute_concrete_regions_to_flash(
 
     # Check for any overlapping regions
 
-    # For non-XIP firmware, check if any region exceeds its slot
+    # Check if any region exceeds the slot boundary that contains its start address.
     for region in regions_to_flash:
-        if region.end_addr > layout.slot_end_addr:
+        if layout.is_bootloader:
+            slot_end_addr = layout.slot_end_addr
+        else:
+            if region.addr < SLOT_BITSTREAM_BASE:
+                raise ValueError(
+                    f"Region {region.memory_region.filename} has invalid address 0x{region.addr:x}"
+                )
+            slot_index = (region.addr - SLOT_BITSTREAM_BASE) // SLOT_SIZE
+            if slot_index < 0 or slot_index >= N_MANIFESTS:
+                raise ValueError(
+                    f"Region {region.memory_region.filename} starts outside user slot range: "
+                    f"0x{region.addr:x}"
+                )
+            slot_end_addr = SLOT_BITSTREAM_BASE + ((slot_index + 1) * SLOT_SIZE)
+
+        if region.end_addr > slot_end_addr:
             raise ValueError(
                 f"Region {region.memory_region.filename} exceeds slot boundary: "
-                f"ends at 0x{region.end_addr:x}, slot ends at 0x{layout.slot_end_addr:x}"
+                f"ends at 0x{region.end_addr:x}, slot ends at 0x{slot_end_addr:x}"
             )
 
     # Sort by start address and check for overlaps

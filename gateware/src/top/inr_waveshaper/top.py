@@ -309,7 +309,8 @@ if __name__ == "__main__":
             fw_location=FirmwareLocation.PSRAM,
             fw_offset=phase_h_psram_dst,
         )
-        return archiver.with_option_storage()
+        # don't need option_storage ( more room for phase_h.bin! )
+        return archiver
 
     top_level_cli(
         CoreTop,

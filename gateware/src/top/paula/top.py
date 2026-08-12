@@ -78,7 +78,7 @@ class Paula2Top(Elaboratable):
     ADKCON = 0x4F
 
     bitstream_help = BitstreamHelp(
-        brief="Paula2",
+        brief="Midi controlled Paula FPGA core with sampling",
         io_left=[
             "audio in 0",
             "audio in 1",

@@ -240,8 +240,8 @@ class OnePole(wiring.Component):
             inp.eq(self.i.payload),
             self.o.valid.eq(self.i.valid),
             self.i.ready.eq(self.o.ready),
+            self.o.payload.eq(state),
         ]
-        m.d.sync += self.o.payload.eq(state)
         with m.If(self.i.valid & self.o.ready):
             m.d.sync += state.eq(state + ((inp - state) >> self.shift))
 

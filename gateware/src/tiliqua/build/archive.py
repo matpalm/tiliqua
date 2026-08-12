@@ -19,7 +19,7 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 from fastcrc import crc32
-from typing import Optional, List
+from typing import Optional, List, Dict
 from .types import *
 from ..platform import TiliquaRevision
 
@@ -36,7 +36,7 @@ class ArchiveBuilder:
 
     _regions: List[MemoryRegion] = field(default_factory=list)
     _manifest: Optional[BitstreamManifest] = None
-    _firmware_bin_path: Optional[str] = None
+    _resource_paths: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         # Ensure build directory exists
@@ -59,7 +59,7 @@ class ArchiveBuilder:
     def bitstream_path(self) -> str:
         return os.path.join(self.build_path, "top.bit")
 
-    def with_bitstream(self, filename: str = "top.bit") -> 'ArchiveBuilder':
+    def with_bitstream(self, filename: str = "top.bit") -> "ArchiveBuilder":
         """Add bitstream region and return self for chaining."""
         if not os.path.exists(self.bitstream_path):
             print(f"WARNING: Bitstream file not found at {self.bitstream_path}")
@@ -73,16 +73,18 @@ class ArchiveBuilder:
             filename=filename,
             region_type=RegionType.Bitstream,
             spiflash_src=None,  # Will be set by flash.py based on slot
-            psram_dst=None,     # Bitstream is never copied to PSRAM
+            psram_dst=None,  # Bitstream is never copied to PSRAM
             size=os.path.getsize(self.bitstream_path),
-            crc=bitstream_crc32
+            crc=bitstream_crc32,
         )
 
         # Insert bitstream region at the beginning
         self._regions.insert(0, region)
         return self
 
-    def with_firmware(self, firmware_bin_path: str, fw_location: FirmwareLocation, fw_offset: int) -> 'ArchiveBuilder':
+    def with_firmware(
+        self, firmware_bin_path: str, fw_location: FirmwareLocation, fw_offset: int
+    ) -> "ArchiveBuilder":
         """
         Add a memory region corresponding to a firmware image and return self for chaining.
 
@@ -91,8 +93,6 @@ class ArchiveBuilder:
             fw_location: Location of firmware (BRAM, SPIFlash, or PSRAM)
             fw_offset: Offset address for the firmware
         """
-        self._firmware_bin_path = firmware_bin_path
-
         if not os.path.exists(firmware_bin_path):
             print(f"WARNING: Firmware file not found at {firmware_bin_path}")
             return self
@@ -103,32 +103,65 @@ class ArchiveBuilder:
         # Create memory region based on firmware location
         match fw_location:
             case FirmwareLocation.SPIFlash:
+                filename = os.path.basename(firmware_bin_path)
                 region = MemoryRegion(
-                    filename=os.path.basename(firmware_bin_path),
+                    filename=filename,
                     region_type=RegionType.XipFirmware,
                     spiflash_src=fw_offset,
                     psram_dst=None,
                     size=os.path.getsize(firmware_bin_path),
-                    crc=fw_crc32
+                    crc=fw_crc32,
                 )
                 self._regions.append(region)
+                self._resource_paths[filename] = firmware_bin_path
             case FirmwareLocation.PSRAM:
+                filename = os.path.basename(firmware_bin_path)
                 region = MemoryRegion(
-                    filename=os.path.basename(firmware_bin_path),
+                    filename=filename,
                     region_type=RegionType.RamLoad,
                     spiflash_src=None,  # Will be set by flash.py based on slot
                     psram_dst=fw_offset,
                     size=os.path.getsize(firmware_bin_path),
-                    crc=fw_crc32
+                    crc=fw_crc32,
                 )
                 self._regions.append(region)
+                self._resource_paths[filename] = firmware_bin_path
             case FirmwareLocation.BRAM:
                 # BRAM firmware is baked into bitstream, no separate region needed
                 pass
 
         return self
 
-    def with_option_storage(self, filename: str = "<options>", size: int = 2*FLASH_PAGE_SZ) -> 'ArchiveBuilder':
+    def with_ramload_file(
+        self,
+        file_path: str,
+        psram_dst: int,
+        filename: Optional[str] = None,
+    ) -> "ArchiveBuilder":
+        """Add an arbitrary file as a RamLoad region copied to PSRAM at boot."""
+        if not os.path.exists(file_path):
+            print(f"WARNING: RamLoad file not found at {file_path}")
+            return self
+
+        if filename is None:
+            filename = os.path.basename(file_path)
+
+        payload_crc32 = crc32.bzip2(open(file_path, "rb").read())
+        region = MemoryRegion(
+            filename=filename,
+            region_type=RegionType.RamLoad,
+            spiflash_src=None,
+            psram_dst=psram_dst,
+            size=os.path.getsize(file_path),
+            crc=payload_crc32,
+        )
+        self._regions.append(region)
+        self._resource_paths[filename] = file_path
+        return self
+
+    def with_option_storage(
+        self, filename: str = "<options>", size: int = 2 * FLASH_PAGE_SZ
+    ) -> "ArchiveBuilder":
         """Add option storage region and return self for chaining."""
         region = MemoryRegion(
             filename=filename,
@@ -136,12 +169,12 @@ class ArchiveBuilder:
             spiflash_src=None,  # Will be set by flash.py based on slot
             psram_dst=None,
             size=size,
-            crc=None
+            crc=None,
         )
         self._regions.append(region)
         return self
 
-    def with_manifest(self) -> 'ArchiveBuilder':
+    def with_manifest(self) -> "ArchiveBuilder":
         """Add manifest region and return self for chaining."""
         manifest_region = MemoryRegion(
             filename="manifest.json",
@@ -149,7 +182,7 @@ class ArchiveBuilder:
             region_type=RegionType.Manifest,
             spiflash_src=None,  # Will be set by flash.py
             psram_dst=None,
-            crc=None
+            crc=None,
         )
         self._regions.append(manifest_region)
         return self
@@ -157,7 +190,9 @@ class ArchiveBuilder:
     def write_manifest(self) -> BitstreamManifest:
         """Write serialized manifest file, return the BitstreamManifest object."""
         # Ensure manifest region is added if not already present
-        has_manifest = any(region.region_type == RegionType.Manifest for region in self._regions)
+        has_manifest = any(
+            region.region_type == RegionType.Manifest for region in self._regions
+        )
         if not has_manifest:
             self.with_manifest()
 
@@ -167,7 +202,7 @@ class ArchiveBuilder:
             tag=self.tag,
             regions=self._regions,
             help=self.bitstream_help,
-            external_pll_config=self.external_pll_config
+            external_pll_config=self.external_pll_config,
         )
         self._manifest.write_to_path(self.manifest_path)
         return self._manifest
@@ -196,8 +231,14 @@ class ArchiveBuilder:
         with tarfile.open(self.archive_path, "w:gz") as tar:
             tar.add(self.bitstream_path, arcname="top.bit")
             tar.add(self.manifest_path, arcname="manifest.json")
-            if self._firmware_bin_path and os.path.exists(self._firmware_bin_path):
-                tar.add(self._firmware_bin_path, arcname="firmware.bin")
+            for archive_name, host_path in self._resource_paths.items():
+                if os.path.exists(host_path):
+                    tar.add(host_path, arcname=archive_name)
+                else:
+                    print(
+                        "WARNING: Skipping missing archive resource "
+                        f"'{archive_name}' from '{host_path}'"
+                    )
 
         self._print_archive_info()
         print(f"\nSaved to '{self.build_path}/{self.archive_name}'")

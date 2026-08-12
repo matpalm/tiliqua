@@ -11,8 +11,8 @@ from colorama import Fore, Style
 
 from ..build.types import *
 
-class SlotLayout:
 
+class SlotLayout:
     """
     Given a slot number e.g. ``SlotLayout(None)`` (bootloader) or ``SlotLayout(3)``
     (for user bitstreams), provide a bunch of methods to query desired SPI flash
@@ -52,14 +52,14 @@ class SlotLayout:
     def firmware_base(self) -> int:
         if self.is_bootloader:
             raise ValueError("Bootloader doesn't have firmware base (uses XiP)")
-        return self.FIRMWARE_BASE_OFFSET + ((1+self.slot_number) * SLOT_SIZE)
+        return self.FIRMWARE_BASE_OFFSET + ((1 + self.slot_number) * SLOT_SIZE)
 
     @property
     def options_base(self) -> int:
         if self.is_bootloader:
             return self.OPTIONS_BASE_OFFSET
         else:
-            return self.OPTIONS_BASE_OFFSET + ((1+self.slot_number) * SLOT_SIZE)
+            return self.OPTIONS_BASE_OFFSET + ((1 + self.slot_number) * SLOT_SIZE)
 
     @property
     def slot_start_addr(self) -> int:
@@ -71,7 +71,6 @@ class SlotLayout:
 
 
 class FlashableRegion:
-
     """Wrapper for a ``MemoryRegion`` that has an assigned (final) SPIflash address."""
 
     def __init__(self, memory_region):
@@ -101,10 +100,12 @@ class FlashableRegion:
         return self.addr < other.addr
 
     def __str__(self) -> str:
-        result = (f"{Style.BRIGHT}{self.memory_region.filename}{Style.RESET_ALL} ({self.memory_region.region_type}):\n"
-                  f"    start:     0x{self.addr:x}\n"
-                  f"    start+sz:  0x{self.addr+self.size:x}\n"
-                  f"    end:       0x{self.addr + self.aligned_size - 1:x}")
+        result = (
+            f"{Style.BRIGHT}{self.memory_region.filename}{Style.RESET_ALL} ({self.memory_region.region_type}):\n"
+            f"    start:     0x{self.addr:x}\n"
+            f"    start+sz:  0x{self.addr+self.size:x}\n"
+            f"    end:       0x{self.addr + self.aligned_size - 1:x}"
+        )
         if self.memory_region.region_type == RegionType.RamLoad:
             result = result + f"\n    psram_dst: 0x{self.memory_region.psram_dst:x}"
             result = result + f" (copied by bootloader before bitstream starts)"
@@ -112,8 +113,8 @@ class FlashableRegion:
 
 
 def compute_concrete_regions_to_flash(
-    manifest: BitstreamManifest, slot: Optional[int]) -> (BitstreamManifest, List[FlashableRegion]):
-
+    manifest: BitstreamManifest, slot: Optional[int]
+) -> (BitstreamManifest, List[FlashableRegion]):
     """
     Given a manifest, walk all the regions in it, assigning real SPI flash addresses
     to any regions that need them depending on the current slot assignment.
@@ -130,9 +131,29 @@ def compute_concrete_regions_to_flash(
     layout = SlotLayout(slot)
     regions_to_flash = []
 
+    def _align_up(value: int, align: int) -> int:
+        return (value + align - 1) & ~(align - 1)
+
     ramload_base = None
+    ramload_slot = None
     if not layout.is_bootloader:
-        ramload_base = layout.firmware_base
+        # Place RamLoad payloads immediately after the bitstream to maximize
+        # available room within the slot (before fixed option/manifest sectors).
+        # Older fixed-offset packing left a hole and could report overlaps for
+        # larger payloads that would otherwise fit.
+        bitstream_region = next(
+            (r for r in manifest.regions if r.region_type == RegionType.Bitstream),
+            None,
+        )
+        if bitstream_region is not None:
+            ramload_base = _align_up(
+                layout.bitstream_addr + bitstream_region.size, FLASH_SECTOR_SZ
+            )
+            ramload_slot = slot
+        else:
+            # Fallback for malformed manifests: retain legacy base behavior.
+            ramload_base = layout.firmware_base
+            ramload_slot = slot
 
     # Update all regions with real SPIflash addresses, where needed.
     for region in manifest.regions:
@@ -143,15 +164,38 @@ def compute_concrete_regions_to_flash(
                 region.spiflash_src = layout.manifest_addr
             case RegionType.XipFirmware:
                 # XipFirmware regions already have spiflash_src set from archive creation
-                assert region.spiflash_src is not None, "XipFirmware region missing spiflash_src"
+                assert (
+                    region.spiflash_src is not None
+                ), "XipFirmware region missing spiflash_src"
             case RegionType.OptionStorage:
                 region.spiflash_src = layout.options_base
             case RegionType.RamLoad:
-                assert region.spiflash_src is None, "RamLoad region already has spiflash_src set"
+                assert (
+                    region.spiflash_src is None
+                ), "RamLoad region already has spiflash_src set"
+
+                if not layout.is_bootloader:
+                    # If the current slot cannot accommodate the next payload,
+                    # spill to subsequent slot(s). This keeps boundary checks
+                    # strict while allowing large payloads to consume extra slots.
+                    needed = _align_up(region.size, FLASH_SECTOR_SZ)
+                    while ramload_base + needed > (
+                        SLOT_BITSTREAM_BASE + ((ramload_slot + 1) * SLOT_SIZE)
+                    ):
+                        ramload_slot += 1
+                        if ramload_slot >= N_MANIFESTS:
+                            raise ValueError(
+                                f"Region {region.filename} does not fit in available user slots "
+                                f"starting from slot {slot}"
+                            )
+                        ramload_base = SlotLayout(ramload_slot).bitstream_addr
+
                 region.spiflash_src = ramload_base
                 # Align firmware base to next flash sector boundary
                 ramload_base += region.size
-                ramload_base = (ramload_base + FLASH_SECTOR_SZ - 1) & ~(FLASH_SECTOR_SZ - 1)
+                ramload_base = (ramload_base + FLASH_SECTOR_SZ - 1) & ~(
+                    FLASH_SECTOR_SZ - 1
+                )
 
     # Create a list of regions that exist in the SPI flash (not virtual regions)
     for region in manifest.regions:
@@ -160,11 +204,28 @@ def compute_concrete_regions_to_flash(
 
     # Check for any overlapping regions
 
-    # For non-XIP firmware, check if any region exceeds its slot
+    # Check if any region exceeds the slot boundary that contains its start address.
     for region in regions_to_flash:
-        if region.end_addr > layout.slot_end_addr:
-            raise ValueError(f"Region {region.memory_region.filename} exceeds slot boundary: "
-                             f"ends at 0x{region.end_addr:x}, slot ends at 0x{layout.slot_end_addr:x}")
+        if layout.is_bootloader:
+            slot_end_addr = layout.slot_end_addr
+        else:
+            if region.addr < SLOT_BITSTREAM_BASE:
+                raise ValueError(
+                    f"Region {region.memory_region.filename} has invalid address 0x{region.addr:x}"
+                )
+            slot_index = (region.addr - SLOT_BITSTREAM_BASE) // SLOT_SIZE
+            if slot_index < 0 or slot_index >= N_MANIFESTS:
+                raise ValueError(
+                    f"Region {region.memory_region.filename} starts outside user slot range: "
+                    f"0x{region.addr:x}"
+                )
+            slot_end_addr = SLOT_BITSTREAM_BASE + ((slot_index + 1) * SLOT_SIZE)
+
+        if region.end_addr > slot_end_addr:
+            raise ValueError(
+                f"Region {region.memory_region.filename} exceeds slot boundary: "
+                f"ends at 0x{region.end_addr:x}, slot ends at 0x{slot_end_addr:x}"
+            )
 
     # Sort by start address and check for overlaps
     sorted_regions = sorted(regions_to_flash)
@@ -172,7 +233,9 @@ def compute_concrete_regions_to_flash(
         curr_end = sorted_regions[i].end_addr
         next_start = sorted_regions[i + 1].addr
         if curr_end > next_start:
-            raise ValueError(f"Overlap detected between {sorted_regions[i].name} (ends at 0x{curr_end:x}) "
-                             f"and {sorted_regions[i+1].name} (starts at 0x{next_start:x})")
+            raise ValueError(
+                f"Overlap detected between {sorted_regions[i].memory_region.filename} (ends at 0x{curr_end:x}) "
+                f"and {sorted_regions[i+1].memory_region.filename} (starts at 0x{next_start:x})"
+            )
 
     return (manifest, regions_to_flash)

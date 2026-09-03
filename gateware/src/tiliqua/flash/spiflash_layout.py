@@ -163,7 +163,7 @@ def compute_concrete_regions_to_flash(
     # For non-XIP firmware, check if any region exceeds its slot
     for region in regions_to_flash:
         if region.end_addr > layout.slot_end_addr:
-            raise ValueError(f"Region {region.name} exceeds slot boundary: "
+            raise ValueError(f"Region {region.memory_region.filename} exceeds slot boundary: "
                              f"ends at 0x{region.end_addr:x}, slot ends at 0x{layout.slot_end_addr:x}")
 
     # Sort by start address and check for overlaps

@@ -93,6 +93,7 @@ class WishboneL2Cache(wiring.Component):
         # refilling/evicting cache lines.
         burst_offset = Signal.like(adr_offset)
         burst_offset_lookahead = Signal.like(burst_offset)
+        m.d.comb += burst_offset_lookahead.eq(burst_offset)
 
         # Cache line (data) memory. Each line has (virtual) size `data_width*burst_len`.
         # 'burst_offset'/'adr_offset' index are just extra concatenated address lines.
@@ -206,11 +207,13 @@ class WishboneL2Cache(wiring.Component):
                     rd_port.addr.eq(Cat(burst_offset_lookahead, adr_line)),
                 ]
 
+                with m.If(burst_offset == (self.burst_len - 1)):
+                    m.d.comb += slave.cti.eq(wishbone.CycleType.END_OF_BURST)
+
                 with m.If(slave.ack):
                     m.d.comb += burst_offset_lookahead.eq(burst_offset+1)
                     m.d.sync += burst_offset.eq(burst_offset + 1)
                     with m.If(burst_offset == (self.burst_len - 1)):
-                        m.d.comb += slave.cti.eq(wishbone.CycleType.END_OF_BURST)
                         m.next = "WAIT-REFILL"
 
             with m.State("WAIT-REFILL"):
@@ -229,13 +232,14 @@ class WishboneL2Cache(wiring.Component):
                     slave.we.eq(0),
                     slave.cti.eq(wishbone.CycleType.INCR_BURST),
                 ]
+                with m.If(burst_offset == (self.burst_len - 1)):
+                    m.d.comb += slave.cti.eq(wishbone.CycleType.END_OF_BURST)
                 with m.If(slave.ack):
                     m.d.comb += [
                         write_from_slave.eq(1),
                     ]
                     m.d.sync += burst_offset.eq(burst_offset + 1)
                     with m.If(burst_offset == (self.burst_len - 1)):
-                        m.d.comb += slave.cti.eq(wishbone.CycleType.END_OF_BURST)
                         m.next = "TEST_HIT"
 
             if self.autoflush:
@@ -256,12 +260,13 @@ class WishboneL2Cache(wiring.Component):
                         slave.cti.eq(wishbone.CycleType.INCR_BURST),
                         rd_port.addr.eq(Cat(burst_offset_lookahead, adr_line)),
                     ]
+                    with m.If(burst_offset == (self.burst_len - 1)):
+                        m.d.comb += slave.cti.eq(wishbone.CycleType.END_OF_BURST)
                     with m.If(slave.ack):
                         m.d.comb += burst_offset_lookahead.eq(burst_offset+1)
                         m.d.sync += burst_offset.eq(burst_offset + 1)
                         with m.If(burst_offset == (self.burst_len - 1)):
                             m.d.comb += [
-                                slave.cti.eq(wishbone.CycleType.END_OF_BURST),
                                 tag_di.valid.eq(0),
                                 tag_wr_port.en.eq(1)
                             ]

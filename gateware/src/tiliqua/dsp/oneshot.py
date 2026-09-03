@@ -32,22 +32,19 @@ class Trigger(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        trigger = Signal()
         l_sample = Signal(shape=self.shape)
 
         m.d.comb += [
             self.o.valid.eq(self.i.valid),
             self.i.ready.eq(self.o.ready),
+            self.o.payload.eq(
+                (l_sample              < self.i.payload.threshold) &
+                (self.i.payload.sample >= self.i.payload.threshold)
+            ),
         ]
 
         with m.If(self.i.valid & self.o.ready):
             m.d.sync += l_sample.eq(self.i.payload.sample)
-            m.d.comb += [
-                self.o.payload.eq(
-                    (l_sample              < self.i.payload.threshold) &
-                    (self.i.payload.sample >= self.i.payload.threshold)
-                ),
-            ]
 
         return m
 
